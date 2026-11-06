@@ -2,7 +2,7 @@
 
 Нужны Pillow, numpy и scipy (в самой игре они не используются):
 
-    python3 tools/build_assets.py путь/к/листу_ассетов.webp
+    python3 tools/build_assets.py лист_ассетов.webp [лист_выключателей.webp]
 
 Скрипт вырезает спрайты персонажа и предметов, собирает ночной фон с
 домиками, деревьями и рамкой поля и готовит светящиеся окна домиков.
@@ -93,6 +93,23 @@ def save_sprites(sheet: Image.Image) -> dict[str, Image.Image]:
     scaled(sprites["pause"], 68).save(ASSETS / "ui/pause.png")
     scaled(sprites["flower"], 34).save(ASSETS / "objects/flower.png")
     return sprites
+
+
+SWITCH_BOXES = {
+    "objects/switch.png": ((49, 109, 383, 481), 60),          # на стене, рычаг вверх
+    "objects/switch_off.png": ((438, 109, 770, 481), 60),     # рычаг вниз
+    "ui/switch_icon_on.png": ((797, 97, 1145, 484), 52),      # на подставке, вверх
+    "ui/switch_icon_off.png": ((1174, 98, 1515, 484), 52),    # на подставке, вниз
+    "effects/click_flash.png": ((20, 533, 394, 948), 220),    # вспышка-звезда
+}
+
+
+def save_switch_sprites(sheet: Image.Image) -> None:
+    """Вырезать выключатели и эффекты щелчка из второго листа ассетов."""
+    for name, (box, width) in SWITCH_BOXES.items():
+        img = sheet.crop(box)
+        img = img.crop(img.getbbox())
+        scaled(img, width).save(ASSETS / name)
 
 
 def lit_windows(house: Image.Image) -> list[np.ndarray]:
@@ -354,6 +371,8 @@ def main() -> None:
     sheet = Image.open(sheet_path).convert("RGBA")
     sprites = save_sprites(sheet)
     build_background(sprites)
+    if len(sys.argv) > 2:
+        save_switch_sprites(Image.open(sys.argv[2]).convert("RGBA"))
     print("готово:", ASSETS)
 
 

@@ -132,6 +132,11 @@ class Assets:
         self.body = load("characters/snake_body.png")
         self.tail = load("characters/snake_tail.png")
         self.bulb = load("objects/bulb.png")
+        self.switch_on = load("objects/switch.png")
+        self.switch_off = load("objects/switch_off.png")
+        self.switch_icon_on = load("ui/switch_icon_on.png")
+        self.switch_icon_off = load("ui/switch_icon_off.png")
+        self.click_flash = load("effects/click_flash.png")
         self.star = load("effects/star.png")
         self.leaf = load("ui/leaf.png")
         self.pause = load("ui/pause.png")
@@ -372,54 +377,112 @@ class LightRayEffect:
         screen.blit(image, image.get_rect(center=center))
 
 
-# --- Лампочка ---------------------------------------------------------------
-class BulbRenderer:
-    """Рисованная лампочка: мягко светится, пульсирует и искрит."""
+# --- Управление светом ------------------------------------------------------
+class LightController:
+    """Состояние света в мире: выключается на 5 секунд, затем включается сам.
+
+    Время считается по dt (а не sleep), поэтому игра не зависает, а на паузе
+    отсчёт замирает. Повторный выключатель заново запускает 5 секунд.
+    """
+
+    def __init__(self) -> None:
+        """Свет включён."""
+        self.remaining = 0.0   # сколько секунд свет ещё будет выключен
+        self.darkness = 0.0    # 0 — светло, 1 — ночь (меняется плавно)
+
+    @property
+    def is_off(self) -> bool:
+        """Идёт ли сейчас отсчёт выключенного света."""
+        return self.remaining > 0
+
+    @property
+    def countdown(self) -> int:
+        """Целые секунды для индикатора: 5, 4, 3, 2, 1, 0."""
+        return max(0, min(5, math.ceil(self.remaining - 1e-9)))
+
+    @property
+    def fraction(self) -> float:
+        """Какая доля времени выключения осталась (1.0 → 0.0)."""
+        return clamp01(self.remaining * 1000 / ds.LIGHT_OFF_MS)
+
+    def switch_off(self) -> None:
+        """Выключить свет (или продлить выключение заново на 5 секунд)."""
+        self.remaining = ds.LIGHT_OFF_MS / 1000
+
+    def force_on(self) -> None:
+        """Сразу начать возвращать свет."""
+        self.remaining = 0.0
+
+    def reset(self) -> None:
+        """Мгновенно вернуть дневное состояние (новая партия)."""
+        self.remaining = 0.0
+        self.darkness = 0.0
+
+    def update(self, dt: float) -> Optional[str]:
+        """Продвинуть время; вернуть "on", когда свет только что включился."""
+        event = None
+        if self.remaining > 0:
+            self.remaining = max(0.0, self.remaining - dt)
+            if self.remaining == 0:
+                event = "on"
+        if self.remaining > 0:
+            self.darkness = min(1.0, self.darkness + dt / ds.LIGHT_FADE_OUT)
+        else:
+            self.darkness = max(0.0, self.darkness - dt / ds.LIGHT_FADE_IN)
+        return event
+
+
+# --- Выключатель ------------------------------------------------------------
+class SwitchRenderer:
+    """Выключатель света: покачивается, светится и заметен даже в темноте."""
 
     def __init__(self, assets: Assets, particles: ParticleSystem) -> None:
-        """Подготовить кадры пульсации заранее."""
-        base = assets.bulb
-        self._frames = []
-        for step in range(9):
-            scale = 0.94 + 0.12 * step / 8
-            size = (int(base.get_width() * scale), int(base.get_height() * scale))
-            self._frames.append(pygame.transform.smoothscale(base, size))
-        self._halo = build_glow(52, ds.GOLD, 150)
+        """Заранее повернуть выключатель на несколько углов для покачивания."""
+        base = assets.switch_on
+        self._frames = [
+            pygame.transform.rotozoom(base, angle, 1.0) for angle in range(-6, 7, 2)
+        ]
+        self._halo = build_glow(54, (255, 214, 120), 150)
+        self._cool = build_glow(80, (150, 205, 255), 200)
         self._spark = build_glow(5, (255, 244, 190), 255)
-        self._rnd = random.Random()
         self.born = 0.0
         self.particles = particles
 
     def respawn(self, now: float) -> None:
-        """Лампочка появилась в новом месте — запустить анимацию появления."""
+        """Выключатель появился в новом месте — запустить анимацию появления."""
         self.born = now
 
-    def draw(self, field: pygame.Surface, cell: Tuple[int, int], now: float) -> None:
-        """Нарисовать лампочку в клетке поля."""
+    def draw(self, field: pygame.Surface, cell: Tuple[int, int], now: float,
+             darkness: float = 0.0) -> None:
+        """Нарисовать выключатель в клетке поля (в темноте он светится ярче)."""
         cx = (cell[0] + 0.5) * ds.GRID_SIZE
         cy = (cell[1] + 0.5) * ds.GRID_SIZE - 3 + 2 * math.sin(now * 2.4)
         wave = 0.5 + 0.5 * math.sin(now * 3.2)
+        sway = math.sin(now * 2.6)
         pop = ease_out_back((now - self.born) / 0.45)
 
-        halo = self._halo
-        if pop < 0.999:
-            size = max(int(halo.get_width() * pop), 2)
-            halo = pygame.transform.smoothscale(halo, (size, size))
-        halo.set_alpha(int(150 + 100 * wave) if pop >= 0.999 else 150)
+        def scaled(image: pygame.Surface) -> pygame.Surface:
+            if pop >= 0.999:
+                return image
+            size = (max(int(image.get_width() * pop), 2),
+                    max(int(image.get_height() * pop), 2))
+            return pygame.transform.smoothscale(image, size)
+
+        if darkness > 0.01:
+            cool = scaled(self._cool)
+            cool.set_alpha(int(255 * darkness * (0.65 + 0.35 * wave)))
+            field.blit(cool, cool.get_rect(center=(cx, cy)))
+        halo = scaled(self._halo)
+        halo.set_alpha(int(120 + 100 * wave))
         field.blit(halo, halo.get_rect(center=(cx, cy)))
 
-        frame = self._frames[int(wave * (len(self._frames) - 1))]
-        if pop < 0.999:
-            frame = pygame.transform.smoothscale(
-                frame,
-                (max(int(frame.get_width() * pop), 2),
-                 max(int(frame.get_height() * pop), 2)),
-            )
+        frame = self._frames[round((sway + 1) / 2 * (len(self._frames) - 1))]
+        frame = scaled(frame)
         field.blit(frame, frame.get_rect(center=(cx, cy)))
 
         for k in range(3):
             angle = now * 1.7 + k * math.tau / 3
-            radius = 30 + 4 * math.sin(now * 2 + k)
+            radius = 36 + 4 * math.sin(now * 2 + k)
             self._spark.set_alpha(int(120 + 120 * math.sin(now * 5 + k * 2) ** 2))
             field.blit(
                 self._spark,
@@ -428,6 +491,98 @@ class BulbRenderer:
                             cy + math.sin(angle) * radius * 0.8)
                 ),
             )
+
+
+class SwitchClickEffect:
+    """Щелчок: рычаг переключается, мягкая вспышка, лёгкая вспышка поля."""
+
+    def __init__(self, assets: Assets) -> None:
+        """Подготовить спрайты и слой вспышки."""
+        self.on = assets.switch_on
+        self.off = assets.switch_off
+        self.flash = assets.click_flash
+        self._field_flash = pygame.Surface((ds.FIELD_WIDTH, ds.FIELD_HEIGHT))
+        self._field_flash.fill((205, 225, 255))
+        self.pos: Point = (0, 0)
+        self.t = ds.CLICK_EFFECT_TIME
+
+    @property
+    def active(self) -> bool:
+        """Идёт ли сейчас анимация."""
+        return self.t < ds.CLICK_EFFECT_TIME
+
+    def trigger(self, pos: Point) -> None:
+        """Запустить анимацию щелчка в точке поля."""
+        self.pos = pos
+        self.t = 0.0
+
+    def update(self, dt: float) -> None:
+        """Продвинуть время анимации."""
+        if self.active:
+            self.t += dt
+
+    def draw(self, field: pygame.Surface) -> None:
+        """Нарисовать анимацию щелчка."""
+        if not self.active:
+            return
+        k = self.t / ds.CLICK_EFFECT_TIME
+        x, y = self.pos
+
+        flash_k = clamp01(self.t / 0.4)
+        size = int(60 + 110 * flash_k)
+        star = pygame.transform.smoothscale(self.flash, (size, int(size * 1.11)))
+        star.set_alpha(int(170 * (1 - flash_k)))
+        field.blit(star, star.get_rect(center=(x, y)))
+
+        sprite = self.on if self.t < 0.1 else self.off
+        scale = 1 + 0.35 * smoothstep(k * 1.6)
+        image = pygame.transform.smoothscale(
+            sprite,
+            (int(sprite.get_width() * scale), int(sprite.get_height() * scale)),
+        )
+        image.set_alpha(int(255 * (1 - smoothstep((k - 0.35) / 0.65))))
+        field.blit(image, image.get_rect(center=(x, y - 10 * k)))
+
+        flash = (1 - clamp01(self.t / 0.3)) ** 2 * 26
+        if flash > 1:
+            self._field_flash.set_alpha(int(flash))
+            field.blit(self._field_flash, (0, 0))
+
+
+class Banner:
+    """Надпись по центру сверху поля: быстро появляется и плавно исчезает."""
+
+    def __init__(self, assets: Assets, text: str, duration: float,
+                 outline: Color = ds.WOOD_DARK) -> None:
+        """Нарисовать текст один раз."""
+        self.image = outlined_text(assets.font(46), text, ds.CREAM, outline, 4)
+        self.duration = duration
+        self.t = duration
+
+    def show(self) -> None:
+        """Показать надпись."""
+        self.t = 0.0
+
+    def update(self, dt: float) -> None:
+        """Продвинуть время показа."""
+        if self.t < self.duration:
+            self.t += dt
+
+    def draw(self, screen: pygame.Surface) -> None:
+        """Нарисовать надпись с мягким появлением."""
+        if self.t >= self.duration:
+            return
+        appear = smoothstep(self.t / 0.2)
+        vanish = 1 - smoothstep((self.t - (self.duration - 0.6)) / 0.6)
+        alpha = int(255 * appear * vanish)
+        if alpha <= 0:
+            return
+        pop = 0.75 + 0.25 * ease_out_back(self.t / 0.35)
+        size = (int(self.image.get_width() * pop), int(self.image.get_height() * pop))
+        image = pygame.transform.smoothscale(self.image, size)
+        image.set_alpha(alpha)
+        center = (ds.SCREEN_WIDTH // 2, ds.FIELD_Y + 58 - 8 * smoothstep(self.t))
+        screen.blit(image, image.get_rect(center=center))
 
 
 # --- Змейка-персонаж --------------------------------------------------------
@@ -520,7 +675,7 @@ class SnakeRenderer:
 
 # --- Фон с домиками ---------------------------------------------------------
 class BackgroundRenderer:
-    """Ночной мир: чем больше лампочек, тем больше окон светится."""
+    """Ночной мир с домиками: окна светятся, пока свет включён."""
 
     def __init__(self, assets: Assets) -> None:
         """Подготовить фон, окна, мерцающие звёзды и лёгкий туман."""
@@ -538,6 +693,9 @@ class BackgroundRenderer:
             build_glow(150, (150, 205, 195), 46), (440, 150)
         )
         self.spill = build_glow(46, (255, 196, 80), 140)
+        self._night = pygame.Surface((ds.SCREEN_WIDTH, ds.SCREEN_HEIGHT))
+        self._night.fill(ds.NIGHT_COLOR)
+        self._cool = pygame.Surface((ds.FIELD_WIDTH, ds.FIELD_HEIGHT))
 
     def set_lit(self, count: int) -> None:
         """Сколько окон должно гореть."""
@@ -554,16 +712,17 @@ class BackgroundRenderer:
             elif self.ramp[i] > goal:
                 self.ramp[i] = max(goal, self.ramp[i] - step * 3)
 
-    def draw(self, screen: pygame.Surface) -> None:
-        """Нарисовать фон, мерцание звёзд и светящиеся окна."""
+    def draw(self, screen: pygame.Surface, darkness: float = 0.0) -> None:
+        """Нарисовать фон, мерцание звёзд и светящиеся окна (гаснут в темноте)."""
         screen.blit(self.background, (0, 0))
+        daylight = 1 - darkness
         for i, pos in enumerate(self.stars):
             alpha = int(90 + 120 * math.sin(self.time * 1.4 + i * 1.7) ** 2)
             self.starlight.set_alpha(alpha)
             screen.blit(self.starlight, pos)
         for i, (image, pos, center) in enumerate(self.windows):
-            ramp = self.ramp[i]
-            if ramp <= 0:
+            ramp = self.ramp[i] * daylight
+            if ramp <= 0.01:
                 continue
             self.spill.set_alpha(int(255 * clamp01(ramp)))
             screen.blit(self.spill, self.spill.get_rect(center=center))
@@ -571,6 +730,15 @@ class BackgroundRenderer:
             image.set_alpha(int(min(255, 255 * ramp * min(glow, 1.0))
                                 * (0.93 + 0.07 * math.sin(self.time * 2.3 + i))))
             screen.blit(image, pos)
+
+    def draw_night(self, screen: pygame.Surface, darkness: float) -> None:
+        """Полупрозрачный холодный синий слой ночи (не чёрная заливка)."""
+        if darkness <= 0.01:
+            return
+        self._night.set_alpha(int(ds.NIGHT_ALPHA * darkness))
+        screen.blit(self._night, (0, 0))
+        self._cool.fill(tuple(int(c * darkness) for c in ds.NIGHT_COOL_ADD))
+        screen.blit(self._cool, ds.FIELD_RECT[:2], special_flags=pygame.BLEND_RGB_ADD)
 
     def draw_mist(self, field: pygame.Surface) -> None:
         """Лёгкий туман, плывущий над полем."""
@@ -675,7 +843,7 @@ class TipBar:
 
     def draw(self, screen: pygame.Surface) -> None:
         """Нарисовать табличку по центру внизу."""
-        rect = self.panel.get_rect(center=(ds.SCREEN_WIDTH // 2 - 30, 660))
+        rect = self.panel.get_rect(center=(730, 660))
         screen.blit(self.panel, rect)
         screen.blit(self.leaf, (rect.x + 34, rect.centery - 24))
         center = (rect.centerx + 30, rect.centery - 4)
@@ -684,6 +852,60 @@ class TipBar:
             screen.blit(self.previous, self.previous.get_rect(center=center))
         self.current.set_alpha(int(255 * self.fade))
         screen.blit(self.current, self.current.get_rect(center=center))
+
+
+class LightIndicator:
+    """Табличка «СВЕТ ВКЛЮЧЁН / ВЫКЛЮЧЕН» с обратным отсчётом."""
+
+    SIZE = (296, 74)
+
+    def __init__(self, assets: Assets) -> None:
+        """Нарисовать обе версии таблички один раз."""
+        self.assets = assets
+        self.panel_on = wood_panel(self.SIZE, 22, ds.CREAM, ds.WOOD, seed=21)
+        self.panel_off = wood_panel(self.SIZE, 22, (52, 84, 124), ds.WOOD, seed=21)
+        self.icon_on = assets.switch_icon_on
+        self.icon_off = assets.switch_icon_off
+        self.rect = pygame.Rect(0, 0, *self.SIZE)
+        self.rect.center = (20 + self.SIZE[0] // 2, 660)
+        self.texts: Dict[Tuple[str, int, Color], pygame.Surface] = {}
+
+    def _text(self, text: str, size: int, color: Color) -> pygame.Surface:
+        key = (text, size, color)
+        if key not in self.texts:
+            self.texts[key] = self.assets.font(size).render(text, True, color)
+        return self.texts[key]
+
+    def draw(self, screen: pygame.Surface, light: LightController) -> None:
+        """Нарисовать индикатор в левом нижнем углу."""
+        rect = self.rect
+        screen.blit(self.panel_on, rect)
+        if light.darkness > 0.01:
+            self.panel_off.set_alpha(int(255 * light.darkness))
+            screen.blit(self.panel_off, rect)
+
+        night = light.darkness > 0.45
+        icon = self.icon_off if night else self.icon_on
+        screen.blit(icon, icon.get_rect(center=(rect.x + 40, rect.centery - 3)))
+
+        if not night:
+            label = self._text("СВЕТ ВКЛЮЧЁН", 18, (52, 86, 40))
+            screen.blit(label, label.get_rect(midleft=(rect.x + 74, rect.centery - 4)))
+            return
+
+        label = self._text("СВЕТ ВЫКЛЮЧЕН", 18, ds.CREAM)
+        screen.blit(label, label.get_rect(midleft=(rect.x + 74, rect.y + 26)))
+        bar = pygame.Rect(rect.x + 74, rect.y + 44, 150, 10)
+        pygame.draw.rect(screen, (30, 52, 88), bar, border_radius=5)
+        fill = bar.copy()
+        fill.width = int(bar.width * light.fraction)
+        if fill.width > 2:
+            pygame.draw.rect(screen, ds.GOLD, fill, border_radius=5)
+        badge = (rect.right - 30, rect.centery - 2)
+        pygame.draw.circle(screen, ds.WOOD, badge, 22)
+        pygame.draw.circle(screen, ds.CREAM, badge, 18)
+        number = self._text(str(light.countdown), 28, (150, 70, 10))
+        screen.blit(number, number.get_rect(center=(badge[0], badge[1] - 2)))
 
 
 # --- Интерфейс --------------------------------------------------------------
@@ -725,6 +947,10 @@ class GameUI:
         self.counter_font = assets.font(34)
         self.level_panel = self._level_panel()
         self.tip = TipBar(assets)
+        self.light_indicator = LightIndicator(assets)
+        self.click_banner = Banner(assets, ds.CLICK_BANNER, ds.CLICK_BANNER_TIME,
+                                   (14, 30, 66))
+        self.switch_big = pygame.transform.smoothscale(assets.switch_on, (96, 107))
         self.pause_image = pygame.transform.smoothscale(assets.pause, (66, 68))
         self.pause_rect = self.pause_image.get_rect(center=(1196, 660))
         self.dim = pygame.Surface((ds.SCREEN_WIDTH, ds.SCREEN_HEIGHT),
@@ -766,18 +992,19 @@ class GameUI:
         """Продвинуть анимации интерфейса."""
         self.tip.update(dt)
         self.bubble.update(dt)
+        self.click_banner.update(dt)
         if self.bump < ds.COUNTER_BUMP_TIME:
             self.bump += dt
 
     def draw_hud(self, screen: pygame.Surface, score: int, level: int,
-                 hover_pause: bool) -> None:
-        """Верхняя панель, нижняя подсказка и кнопка паузы."""
+                 hover_pause: bool, light: LightController) -> None:
+        """Верхняя панель, индикатор света, подсказка и кнопка паузы."""
         screen.blit(self.leaf_big, (26, 24))
         screen.blit(self.title, (84, 22))
 
         rect = self.counter_panel.get_rect(center=(ds.SCREEN_WIDTH // 2, 48))
         screen.blit(self.counter_panel, rect)
-        label = self._text("ЛАМПОЧКИ", 30, ds.TEXT_DARK)
+        label = self._text("ВЫКЛЮЧАТЕЛИ", 27, ds.TEXT_DARK)
         screen.blit(label, label.get_rect(midleft=(rect.x + 26, rect.centery - 3)))
         number = self._text(f"{score}", 40, (150, 70, 10))
         if self.bump < ds.COUNTER_BUMP_TIME:
@@ -792,6 +1019,7 @@ class GameUI:
         level_label = self._text(f"УРОВЕНЬ {level}", 27, ds.CREAM)
         screen.blit(level_label, level_label.get_rect(center=level_rect.center))
 
+        self.light_indicator.draw(screen, light)
         self.tip.draw(screen)
         image = self.pause_image
         if hover_pause:
@@ -824,11 +1052,11 @@ class GameUI:
             center=(rect.centerx - 150, rect.y + 188 + bob)))
         screen.blit(self.glow, self.glow.get_rect(center=(rect.centerx + 140,
                                                          rect.y + 190)))
-        screen.blit(self.bulb_big, self.bulb_big.get_rect(
+        screen.blit(self.switch_big, self.switch_big.get_rect(
             center=(rect.centerx + 140, rect.y + 190 - bob)))
         self._lines(screen, [f"Привет! Я {ds.SNAKE_NAME}.",
-                             "Помоги мне найти лампочки —",
-                             "в домиках загорятся окошки!"], 392, 28)
+                             "Собирай выключатели —",
+                             "выключай свет и береги энергию!"], 392, 28)
         hint = self._text("Управление: стрелки на клавиатуре", 22, (110, 80, 40))
         screen.blit(hint, hint.get_rect(center=(rect.centerx, rect.bottom - 100)))
         self.buttons["start"].draw(screen, self.buttons["start"].rect.collidepoint(mouse))
@@ -856,7 +1084,7 @@ class GameUI:
         screen.blit(self.head_big, self.head_big.get_rect(
             center=(rect.centerx - 130, rect.y + 190 - bounce)))
         self._lines(screen, ["Ты настоящий друг энергии!",
-                             f"Собрано лампочек: {score}"], 390, 32,
+                             f"Собрано выключателей: {score}"], 390, 32,
                     (52, 86, 40))
         button = self.buttons["again"]
         button.draw(screen, button.rect.collidepoint(mouse))

@@ -27,11 +27,13 @@ from design import (
 from visuals import (
     Assets,
     BackgroundRenderer,
-    BulbRenderer,
     GameUI,
+    LightController,
     LightRayEffect,
     ParticleSystem,
     SnakeRenderer,
+    SwitchClickEffect,
+    SwitchRenderer,
 )
 
 
@@ -55,6 +57,12 @@ ALL_CELLS = {
     (x, y)
     for x in range(GRID_WIDTH)
     for y in range(GRID_HEIGHT)
+}
+# Выключатель не появляется на самом краю, чтобы рамка поля не обрезала его.
+INNER_CELLS = {
+    (x, y)
+    for x in range(1, GRID_WIDTH - 1)
+    for y in range(1, GRID_HEIGHT - 1)
 }
 
 KEY_ALIASES = {
@@ -160,7 +168,7 @@ class Apple(GameObject):
             occupied_positions: Клетки, занятые змейкой.
         """
         occupied = occupied_positions or set()
-        free_cells = tuple(ALL_CELLS - occupied)
+        free_cells = tuple(INNER_CELLS - occupied) or tuple(ALL_CELLS - occupied)
         self.position = choice(free_cells) if free_cells else CENTER_POSITION
 
     def draw(self, surface: pygame.Surface) -> None:
@@ -319,10 +327,10 @@ def update_caption(snake: Snake, score: int = 0) -> None:
 
     Args:
         snake: Экземпляр змейки.
-        score: Сколько лампочек собрано.
+        score: Сколько выключателей собрано.
     """
     pygame.display.set_caption(
-        f"{WINDOW_TITLE} | Лампочки: {score} | Длина: {snake.length}"
+        f"{WINDOW_TITLE} | Выключатели: {score} | Длина: {snake.length}"
     )
 
 
@@ -335,7 +343,9 @@ class Game:
         self.background = BackgroundRenderer(self.assets)
         self.particles = ParticleSystem(self.assets.star)
         self.light_effect = LightRayEffect(self.assets, self.particles)
-        self.bulb_renderer = BulbRenderer(self.assets, self.particles)
+        self.switch_renderer = SwitchRenderer(self.assets, self.particles)
+        self.click_effect = SwitchClickEffect(self.assets)
+        self.light = LightController()
         self.snake_renderer = SnakeRenderer(self.assets)
         self.ui = GameUI(self.assets)
         self.field_surface: Optional[pygame.Surface] = None
@@ -350,16 +360,17 @@ class Game:
         """Подготовить новую партию (экран не меняется)."""
         self.snake = Snake()
         self.apple = Apple(occupied_positions=self.snake.get_positions_set())
-        self.bulb_renderer.respawn(self.now)
+        self.switch_renderer.respawn(self.now)
         self.score = 0
         self.level = 1
         self.step_acc = 0.0
         self.progress = 1.0
         self.idle_timer = 0.0
-        self.tip_timer = 0.0
         self.finish_timer = 0.0
         self.light_effect.active = False
-        self.background.set_lit(0)
+        self.light.reset()
+        self.dark_tip_pending = False
+        self.background.set_lit(len(self.background.windows))
         self.ui.tip.set_text(ds.DEFAULT_TIP)
         update_caption(self.snake, self.score)
 
@@ -393,25 +404,25 @@ class Game:
         return self.snake_renderer.pixel_position(self.snake, 0, self.progress)
 
     def step(self) -> None:
-        """Сделать один шаг: движение, лампочка, укус хвоста."""
+        """Сделать один шаг: движение, выключатель, укус хвоста."""
         snake = self.snake
         snake.update_direction()
         snake.move()
 
         if snake.get_head_position() == self.apple.position:
-            self.collect_bulb()
+            self.collect_switch()
 
         if snake.has_self_collision():
             snake.reset()
             self.apple.randomize_position(snake.get_positions_set())
-            self.bulb_renderer.respawn(self.now)
+            self.switch_renderer.respawn(self.now)
             self.ui.bubble.say(ds.OOPS_SPEECH)
             update_caption(snake, self.score)
 
-    def collect_bulb(self) -> None:
-        """Змейка съела лампочку: рост, свет, частицы, похвала."""
+    def collect_switch(self) -> None:
+        """Змейка собрала выключатель: рост, щелчок, свет гаснет на 5 секунд."""
         snake = self.snake
-        bulb_px = (
+        switch_px = (
             (self.apple.position[0] + 0.5) * GRID_SIZE,
             (self.apple.position[1] + 0.5) * GRID_SIZE,
         )
@@ -422,25 +433,45 @@ class Game:
         )
         self.idle_timer = 0.0
 
-        self.background.set_lit(self.score)
         self.ui.pop_counter()
         self.snake_renderer.react()
-        self.light_effect.trigger(bulb_px, self.head_pixel())
+        self.click_effect.trigger(switch_px)
+        self.particles.burst(switch_px[0], switch_px[1], 14)
+        self.light_effect.active = False
+        self.ui.click_banner.show()
 
         self.praise_index = (self.praise_index + 1) % len(ds.PRAISES)
         self.ui.bubble.say(ds.PRAISES[self.praise_index])
-        self.ui.tip.set_text(ds.TIPS[self.tip_index % len(ds.TIPS)])
-        self.tip_index += 1
-        self.tip_timer = ds.TIP_SHOW_TIME
         update_caption(snake, self.score)
 
         if self.score >= ds.WIN_SCORE:
             self.state = "celebrating"
             self.finish_timer = 2.4
-            self.ui.tip.set_text(ds.TIPS[3])
-        else:
-            self.apple.randomize_position(snake.get_positions_set())
-            self.bulb_renderer.respawn(self.now)
+            self.light.force_on()
+            self.dark_tip_pending = False
+            self.ui.tip.set_text(ds.WIN_TIP)
+            self.light_effect.trigger(switch_px, self.head_pixel())
+            return
+
+        self.light.switch_off()  # повторный сбор снова запускает 5 секунд
+        self.ui.tip.set_text(ds.PICK_TIPS[self.tip_index % len(ds.PICK_TIPS)])
+        self.dark_tip_pending = True
+        self.apple.randomize_position(snake.get_positions_set())
+        self.switch_renderer.respawn(self.now)
+
+    def update_light(self, dt: float) -> None:
+        """Обновить свет: таймер выключения и подсказки по ситуации."""
+        event = self.light.update(dt)
+        if self.dark_tip_pending and self.light.remaining <= ds.DARK_TIP_AT:
+            self.dark_tip_pending = False
+            tips = ds.DARK_TIPS
+            self.ui.tip.set_text(tips[self.tip_index % len(tips)])
+            self.tip_index += 1
+        if event == "on":
+            self.dark_tip_pending = False
+            self.ui.tip.set_text(ds.DEFAULT_TIP)
+            head = self.head_pixel()
+            self.light_effect.trigger(head, head)
 
     def update(self, dt: float) -> None:
         """Обновить игру и все анимации за кадр длиной dt секунд."""
@@ -458,16 +489,16 @@ class Game:
             if self.idle_timer > ds.IDLE_SPEECH_AFTER:
                 self.idle_timer = 0.0
                 self.ui.bubble.say(ds.LOST_SPEECH)
-            if self.tip_timer > 0:
-                self.tip_timer -= dt
-                if self.tip_timer <= 0:
-                    self.ui.tip.set_text(ds.DEFAULT_TIP)
         elif self.state == "celebrating":
             self.finish_timer -= dt
             if self.finish_timer <= 0:
                 self.state = "won"
 
+        if self.state in ("playing", "celebrating"):
+            self.update_light(dt)  # на паузе отсчёт света стоит
+
         self.background.update(dt)
+        self.click_effect.update(dt)
         self.snake_renderer.update(dt)
         self.light_effect.update(dt, self.head_pixel())
         self.particles.update(dt)
@@ -481,10 +512,13 @@ class Game:
         field = self.field_surface
         mouse = pygame.mouse.get_pos()
 
-        self.background.draw(surface)
+        darkness = self.light.darkness
+        self.background.draw(surface, darkness)
+        self.background.draw_night(surface, darkness)
         self.background.draw_mist(field)
         self.light_effect.draw_under(field)
-        self.bulb_renderer.draw(field, self.apple.position, self.now)
+        self.switch_renderer.draw(field, self.apple.position, self.now, darkness)
+        self.click_effect.draw(field)
         self.snake_renderer.draw(field, self.snake, self.progress)
         self.particles.draw(field)
 
@@ -492,8 +526,9 @@ class Game:
             self.state in ("playing", "paused")
             and self.ui.pause_rect.collidepoint(mouse)
         )
-        self.ui.draw_hud(surface, self.score, self.level, hover_pause)
+        self.ui.draw_hud(surface, self.score, self.level, hover_pause, self.light)
         self.light_effect.draw_banner(surface)
+        self.ui.click_banner.draw(surface)
         head = self.head_pixel()
         self.ui.bubble.draw(surface, head)
 
