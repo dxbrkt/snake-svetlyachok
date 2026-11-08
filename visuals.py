@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Tuple
 import pygame
 
 import design as ds
+from snake_art import SnakeRenderer, make_head
 
 Color = Tuple[int, int, int]
 Point = Tuple[float, float]
@@ -128,7 +129,7 @@ class Assets:
         self.background = pygame.image.load(
             str(ds.ASSETS_DIR / "backgrounds" / "background.png")
         ).convert()
-        self.head = load("characters/snake_head.png")
+        self.head = make_head()
         self.body = load("characters/snake_body.png")
         self.tail = load("characters/snake_tail.png")
         self.bulb = load("objects/bulb.png")
@@ -565,93 +566,6 @@ class Banner:
 
 
 # --- Змейка-персонаж --------------------------------------------------------
-class SnakeRenderer:
-    """Рисует змейку Питошу: голова крупнее тела, плавное движение."""
-
-    def __init__(self, assets: Assets) -> None:
-        """Заранее повернуть спрайты во все стороны."""
-        def variants(image: pygame.Surface) -> Dict[Tuple[int, int], pygame.Surface]:
-            return {
-                (1, 0): image,
-                (-1, 0): pygame.transform.flip(image, True, False),
-                (0, -1): pygame.transform.rotate(image, 90),
-                (0, 1): pygame.transform.rotate(image, -90),
-            }
-
-        self.head = variants(assets.head)
-        self.body = variants(assets.body)
-        self.tail = variants(assets.tail)
-        self.bounce_t = ds.HEAD_BOUNCE_TIME
-
-    def react(self) -> None:
-        """Радостное подпрыгивание головы."""
-        self.bounce_t = 0.0
-
-    def update(self, dt: float) -> None:
-        """Продвинуть анимацию реакции."""
-        if self.bounce_t < ds.HEAD_BOUNCE_TIME:
-            self.bounce_t += dt
-
-    @staticmethod
-    def _unwrap(delta: int, size: int) -> int:
-        if delta > 1:
-            return delta - size
-        if delta < -1:
-            return delta + size
-        return delta
-
-    def pixel_position(self, snake, index: int, progress: float) -> Point:
-        """Плавная позиция сегмента между двумя шагами игры (в пикселях поля)."""
-        cur = snake.positions[index]
-        prev = (
-            snake.previous_positions[index]
-            if index < len(snake.previous_positions)
-            else cur
-        )
-        dx = self._unwrap(cur[0] - prev[0], ds.GRID_WIDTH)
-        dy = self._unwrap(cur[1] - prev[1], ds.GRID_HEIGHT)
-        remain = 1 - progress
-        return (
-            (cur[0] + 0.5 - dx * remain) * ds.GRID_SIZE,
-            (cur[1] + 0.5 - dy * remain) * ds.GRID_SIZE,
-        )
-
-    def _direction_to(self, snake, index: int) -> Tuple[int, int]:
-        """Направление от сегмента к предыдущему (ближе к голове)."""
-        a, b = snake.positions[index], snake.positions[index - 1]
-        dx = self._unwrap(b[0] - a[0], ds.GRID_WIDTH)
-        dy = self._unwrap(b[1] - a[1], ds.GRID_HEIGHT)
-        return (dx, dy) if (dx, dy) in self.body else snake.direction
-
-    def draw(self, field: pygame.Surface, snake, progress: float) -> None:
-        """Нарисовать змейку от хвоста к голове."""
-        count = len(snake.positions)
-        for index in range(count - 1, 0, -1):
-            cx, cy = self.pixel_position(snake, index, progress)
-            direction = self._direction_to(snake, index)
-            if index == count - 1 and count >= 3:
-                away = (-direction[0], -direction[1])
-                sprite = self.tail[away]
-                cx += away[0] * 14
-                cy += away[1] * 14
-            else:
-                sprite = self.body[direction]
-            field.blit(sprite, sprite.get_rect(center=(cx, cy)))
-
-        cx, cy = self.pixel_position(snake, 0, progress)
-        direction = snake.direction
-        sprite = self.head[direction]
-        if self.bounce_t < ds.HEAD_BOUNCE_TIME:
-            factor = 1 + 0.28 * math.sin(math.pi * self.bounce_t / ds.HEAD_BOUNCE_TIME)
-            sprite = pygame.transform.smoothscale(
-                sprite,
-                (int(sprite.get_width() * factor), int(sprite.get_height() * factor)),
-            )
-        cx += direction[0] * 6
-        cy += direction[1] * 6
-        field.blit(sprite, sprite.get_rect(center=(cx, cy)))
-
-
 # --- Фон с домиками ---------------------------------------------------------
 class BackgroundRenderer:
     """Ночной мир с домиками: окна светятся, пока свет включён."""

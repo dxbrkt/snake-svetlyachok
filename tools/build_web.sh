@@ -5,7 +5,7 @@ set -e
 cd "$(dirname "$0")/.."
 rm -rf build/webgame
 mkdir -p build/webgame
-cp the_snake.py design.py visuals.py music.py build/webgame/
+cp the_snake.py design.py visuals.py music.py snake_art.py build/webgame/
 cp -R assets build/webgame/assets
 cat > build/webgame/main.py <<'PY'
 import asyncio
