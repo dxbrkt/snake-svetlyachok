@@ -908,7 +908,6 @@ class GameUI:
         self.counter_font = assets.font(34)
         self.level_panel = self._level_panel()
         self.tip = TipBar(assets)
-        self.light_indicator = LightIndicator(assets)
         self.click_banner = Banner(assets, ds.CLICK_BANNER, ds.CLICK_BANNER_TIME,
                                    (14, 30, 66))
         self.switch_big = pygame.transform.smoothscale(assets.switch_on, (96, 107))
@@ -980,7 +979,6 @@ class GameUI:
         level_label = self._text(f"УРОВЕНЬ {level}", 27, ds.CREAM)
         screen.blit(level_label, level_label.get_rect(center=level_rect.center))
 
-        self.light_indicator.draw(screen, light)
         self.tip.draw(screen)
         image = self.pause_image
         if hover_pause:
