@@ -379,57 +379,29 @@ class LightRayEffect:
 
 # --- Управление светом ------------------------------------------------------
 class LightController:
-    """Состояние света в мире: выключается на 5 секунд, затем включается сам.
-
-    Время считается по dt (а не sleep), поэтому игра не зависает, а на паузе
-    отсчёт замирает. Повторный выключатель заново запускает 5 секунд.
-    """
+    """Прогресс энергосбережения: окна не включаются сами."""
 
     def __init__(self) -> None:
-        """Свет включён."""
-        self.remaining = 0.0   # сколько секунд свет ещё будет выключен
-        self.darkness = 0.0    # 0 — светло, 1 — ночь (меняется плавно)
+        """В начале партии все окна горят."""
+        self.off_count = 0
 
     @property
     def is_off(self) -> bool:
-        """Идёт ли сейчас отсчёт выключенного света."""
-        return self.remaining > 0
-
-    @property
-    def countdown(self) -> int:
-        """Целые секунды для индикатора: 5, 4, 3, 2, 1, 0."""
-        return max(0, min(5, math.ceil(self.remaining - 1e-9)))
+        """Выключен ли свет во всех домиках."""
+        return self.off_count == ds.WIN_SCORE
 
     @property
     def fraction(self) -> float:
-        """Какая доля времени выключения осталась (1.0 → 0.0)."""
-        return clamp01(self.remaining * 1000 / ds.LIGHT_OFF_MS)
+        """Доля погашенных окон."""
+        return self.off_count / ds.WIN_SCORE
 
     def switch_off(self) -> None:
-        """Выключить свет (или продлить выключение заново на 5 секунд)."""
-        self.remaining = ds.LIGHT_OFF_MS / 1000
-
-    def force_on(self) -> None:
-        """Сразу начать возвращать свет."""
-        self.remaining = 0.0
+        """Погасить ещё одно окно до конца партии."""
+        self.off_count = min(ds.WIN_SCORE, self.off_count + 1)
 
     def reset(self) -> None:
-        """Мгновенно вернуть дневное состояние (новая партия)."""
-        self.remaining = 0.0
-        self.darkness = 0.0
-
-    def update(self, dt: float) -> Optional[str]:
-        """Продвинуть время; вернуть "on", когда свет только что включился."""
-        event = None
-        if self.remaining > 0:
-            self.remaining = max(0.0, self.remaining - dt)
-            if self.remaining == 0:
-                event = "on"
-        if self.remaining > 0:
-            self.darkness = min(1.0, self.darkness + dt / ds.LIGHT_FADE_OUT)
-        else:
-            self.darkness = max(0.0, self.darkness - dt / ds.LIGHT_FADE_IN)
-        return event
+        """Начать новую партию с включённым светом."""
+        self.off_count = 0
 
 
 # --- Выключатель ------------------------------------------------------------
@@ -443,7 +415,6 @@ class SwitchRenderer:
             pygame.transform.rotozoom(base, angle, 1.0) for angle in range(-6, 7, 2)
         ]
         self._halo = build_glow(54, (255, 214, 120), 150)
-        self._cool = build_glow(80, (150, 205, 255), 200)
         self._spark = build_glow(5, (255, 244, 190), 255)
         self.born = 0.0
         self.particles = particles
@@ -452,9 +423,8 @@ class SwitchRenderer:
         """Выключатель появился в новом месте — запустить анимацию появления."""
         self.born = now
 
-    def draw(self, field: pygame.Surface, cell: Tuple[int, int], now: float,
-             darkness: float = 0.0) -> None:
-        """Нарисовать выключатель в клетке поля (в темноте он светится ярче)."""
+    def draw(self, field: pygame.Surface, cell: Tuple[int, int], now: float) -> None:
+        """Нарисовать выключатель в клетке поля."""
         cx = (cell[0] + 0.5) * ds.GRID_SIZE
         cy = (cell[1] + 0.5) * ds.GRID_SIZE - 3 + 2 * math.sin(now * 2.4)
         wave = 0.5 + 0.5 * math.sin(now * 3.2)
@@ -468,10 +438,6 @@ class SwitchRenderer:
                     max(int(image.get_height() * pop), 2))
             return pygame.transform.smoothscale(image, size)
 
-        if darkness > 0.01:
-            cool = scaled(self._cool)
-            cool.set_alpha(int(255 * darkness * (0.65 + 0.35 * wave)))
-            field.blit(cool, cool.get_rect(center=(cx, cy)))
         halo = scaled(self._halo)
         halo.set_alpha(int(120 + 100 * wave))
         field.blit(halo, halo.get_rect(center=(cx, cy)))
@@ -683,24 +649,31 @@ class BackgroundRenderer:
         self.windows = assets.windows
         self.ramp = [0.0] * len(self.windows)
         self.target = [0.0] * len(self.windows)
-        self.starlight = pygame.transform.smoothscale(assets.star, (18, 20))
-        self.stars = [
-            (90, 76), (1160, 64), (1236, 214), (60, 250), (1100, 300),
-            (500, 40), (860, 70), (330, 56),
-        ]
         self.time = 0.0
         self.fog = pygame.transform.smoothscale(
             build_glow(150, (150, 205, 195), 46), (440, 150)
         )
         self.spill = build_glow(46, (255, 196, 80), 140)
-        self._night = pygame.Surface((ds.SCREEN_WIDTH, ds.SCREEN_HEIGHT))
-        self._night.fill(ds.NIGHT_COLOR)
-        self._cool = pygame.Surface((ds.FIELD_WIDTH, ds.FIELD_HEIGHT))
+        # Светлый дневной вариант фона: рисунок и фактура сохраняются.
+        self.background = self.background.copy()
+        daylight = pygame.Surface(self.background.get_size())
+        for y in range(ds.SCREEN_HEIGHT):
+            t = y / ds.SCREEN_HEIGHT
+            color = tuple(int(a * (1 - t) + b * t)
+                          for a, b in zip((115, 160, 175), (65, 95, 35)))
+            pygame.draw.line(daylight, color, (0, y), (ds.SCREEN_WIDTH, y))
+        self.background.blit(daylight, (0, 0), special_flags=pygame.BLEND_RGB_ADD)
+        field = assets.background.subsurface(ds.FIELD_RECT).copy()
+        field.fill((165, 146, 91), special_flags=pygame.BLEND_RGB_ADD)
+        self.background.blit(field, ds.FIELD_RECT[:2])
+        frame = pygame.Rect(ds.FIELD_RECT).inflate(12, 12)
+        pygame.draw.rect(self.background, (69, 119, 72), frame,
+                         width=4, border_radius=28)
 
     def set_lit(self, count: int) -> None:
         """Сколько окон должно гореть."""
         for i in range(len(self.target)):
-            self.target[i] = 1.0 if i < count else 0.0
+            self.target[i] = 1.0 if i >= len(self.target) - count else 0.0
 
     def update(self, dt: float) -> None:
         """Плавно зажигать и гасить окна."""
@@ -712,16 +685,11 @@ class BackgroundRenderer:
             elif self.ramp[i] > goal:
                 self.ramp[i] = max(goal, self.ramp[i] - step * 3)
 
-    def draw(self, screen: pygame.Surface, darkness: float = 0.0) -> None:
-        """Нарисовать фон, мерцание звёзд и светящиеся окна (гаснут в темноте)."""
+    def draw(self, screen: pygame.Surface) -> None:
+        """Светлый лес и окна, которые гаснут по одному."""
         screen.blit(self.background, (0, 0))
-        daylight = 1 - darkness
-        for i, pos in enumerate(self.stars):
-            alpha = int(90 + 120 * math.sin(self.time * 1.4 + i * 1.7) ** 2)
-            self.starlight.set_alpha(alpha)
-            screen.blit(self.starlight, pos)
         for i, (image, pos, center) in enumerate(self.windows):
-            ramp = self.ramp[i] * daylight
+            ramp = self.ramp[i]
             if ramp <= 0.01:
                 continue
             self.spill.set_alpha(int(255 * clamp01(ramp)))
@@ -730,15 +698,6 @@ class BackgroundRenderer:
             image.set_alpha(int(min(255, 255 * ramp * min(glow, 1.0))
                                 * (0.93 + 0.07 * math.sin(self.time * 2.3 + i))))
             screen.blit(image, pos)
-
-    def draw_night(self, screen: pygame.Surface, darkness: float) -> None:
-        """Полупрозрачный холодный синий слой ночи (не чёрная заливка)."""
-        if darkness <= 0.01:
-            return
-        self._night.set_alpha(int(ds.NIGHT_ALPHA * darkness))
-        screen.blit(self._night, (0, 0))
-        self._cool.fill(tuple(int(c * darkness) for c in ds.NIGHT_COOL_ADD))
-        screen.blit(self._cool, ds.FIELD_RECT[:2], special_flags=pygame.BLEND_RGB_ADD)
 
     def draw_mist(self, field: pygame.Surface) -> None:
         """Лёгкий туман, плывущий над полем."""
@@ -863,7 +822,6 @@ class LightIndicator:
         """Нарисовать обе версии таблички один раз."""
         self.assets = assets
         self.panel_on = wood_panel(self.SIZE, 22, ds.CREAM, ds.WOOD, seed=21)
-        self.panel_off = wood_panel(self.SIZE, 22, (52, 84, 124), ds.WOOD, seed=21)
         self.icon_on = assets.switch_icon_on
         self.icon_off = assets.switch_icon_off
         self.rect = pygame.Rect(0, 0, *self.SIZE)
@@ -877,35 +835,21 @@ class LightIndicator:
         return self.texts[key]
 
     def draw(self, screen: pygame.Surface, light: LightController) -> None:
-        """Нарисовать индикатор в левом нижнем углу."""
+        """Показать накопленный результат вместо таймера включения света."""
         rect = self.rect
         screen.blit(self.panel_on, rect)
-        if light.darkness > 0.01:
-            self.panel_off.set_alpha(int(255 * light.darkness))
-            screen.blit(self.panel_off, rect)
-
-        night = light.darkness > 0.45
-        icon = self.icon_off if night else self.icon_on
+        icon = self.icon_off if light.off_count else self.icon_on
         screen.blit(icon, icon.get_rect(center=(rect.x + 40, rect.centery - 3)))
-
-        if not night:
-            label = self._text("СВЕТ ВКЛЮЧЁН", 18, (52, 86, 40))
-            screen.blit(label, label.get_rect(midleft=(rect.x + 74, rect.centery - 4)))
-            return
-
-        label = self._text("СВЕТ ВЫКЛЮЧЕН", 18, ds.CREAM)
-        screen.blit(label, label.get_rect(midleft=(rect.x + 74, rect.y + 26)))
-        bar = pygame.Rect(rect.x + 74, rect.y + 44, 150, 10)
-        pygame.draw.rect(screen, (30, 52, 88), bar, border_radius=5)
+        label = self._text("ОКОН ПОГАШЕНО", 17, (52, 86, 40))
+        screen.blit(label, label.get_rect(midleft=(rect.x + 74, rect.y + 24)))
+        bar = pygame.Rect(rect.x + 74, rect.y + 45, 136, 9)
+        pygame.draw.rect(screen, (207, 187, 137), bar, border_radius=4)
         fill = bar.copy()
         fill.width = int(bar.width * light.fraction)
-        if fill.width > 2:
-            pygame.draw.rect(screen, ds.GOLD, fill, border_radius=5)
-        badge = (rect.right - 30, rect.centery - 2)
-        pygame.draw.circle(screen, ds.WOOD, badge, 22)
-        pygame.draw.circle(screen, ds.CREAM, badge, 18)
-        number = self._text(str(light.countdown), 28, (150, 70, 10))
-        screen.blit(number, number.get_rect(center=(badge[0], badge[1] - 2)))
+        if fill.width > 0:
+            pygame.draw.rect(screen, (64, 128, 57), fill, border_radius=4)
+        number = self._text(f"{light.off_count}/{ds.WIN_SCORE}", 19, ds.TEXT_DARK)
+        screen.blit(number, number.get_rect(center=(rect.right - 41, rect.y + 49)))
 
 
 # --- Интерфейс --------------------------------------------------------------
@@ -951,6 +895,7 @@ class GameUI:
         self.click_banner = Banner(assets, ds.CLICK_BANNER, ds.CLICK_BANNER_TIME,
                                    (14, 30, 66))
         self.switch_big = pygame.transform.smoothscale(assets.switch_on, (96, 107))
+        self.switch_off_big = pygame.transform.smoothscale(assets.switch_off, (96, 107))
         self.pause_image = pygame.transform.smoothscale(assets.pause, (66, 68))
         self.pause_rect = self.pause_image.get_rect(center=(1196, 660))
         self.dim = pygame.Surface((ds.SCREEN_WIDTH, ds.SCREEN_HEIGHT),
@@ -960,7 +905,6 @@ class GameUI:
         self.bubble = SpeechBubble(assets)
         self.bump = ds.COUNTER_BUMP_TIME
         self.glow = build_glow(120, ds.GOLD, 200)
-        self.bulb_big = pygame.transform.smoothscale(assets.bulb, (110, 120))
         self.head_big = pygame.transform.smoothscale(assets.head, (176, 127))
         self.buttons = {
             "start": Button(assets, "Играть", (640, 566)),
@@ -985,7 +929,7 @@ class GameUI:
         return self.texts[key]
 
     def pop_counter(self) -> None:
-        """Анимация счётчика при подборе лампочки."""
+        """Анимация счётчика при подборе выключателя."""
         self.bump = 0.0
 
     def update(self, dt: float) -> None:
@@ -1004,7 +948,7 @@ class GameUI:
 
         rect = self.counter_panel.get_rect(center=(ds.SCREEN_WIDTH // 2, 48))
         screen.blit(self.counter_panel, rect)
-        label = self._text("ВЫКЛЮЧАТЕЛИ", 27, ds.TEXT_DARK)
+        label = self._text("ВЫКЛЮЧЕНО", 27, ds.TEXT_DARK)
         screen.blit(label, label.get_rect(midleft=(rect.x + 26, rect.centery - 3)))
         number = self._text(f"{score}", 40, (150, 70, 10))
         if self.bump < ds.COUNTER_BUMP_TIME:
@@ -1055,8 +999,8 @@ class GameUI:
         screen.blit(self.switch_big, self.switch_big.get_rect(
             center=(rect.centerx + 140, rect.y + 190 - bob)))
         self._lines(screen, [f"Привет! Я {ds.SNAKE_NAME}.",
-                             "Собирай выключатели —",
-                             "выключай свет и береги энергию!"], 392, 28)
+                             "Гаси свет в домиках —",
+                             "береги электричество!"], 392, 28)
         hint = self._text("Управление: стрелки на клавиатуре", 22, (110, 80, 40))
         screen.blit(hint, hint.get_rect(center=(rect.centerx, rect.bottom - 100)))
         self.buttons["start"].draw(screen, self.buttons["start"].rect.collidepoint(mouse))
@@ -1074,17 +1018,13 @@ class GameUI:
                  mouse: Tuple[int, int]) -> None:
         """Экран победы."""
         rect = self._panel_with_title(screen, "Ура! Ты победил!")
-        pulse = 1 + 0.06 * math.sin(now * 3)
-        glow = pygame.transform.smoothscale(
-            self.glow, (int(240 * pulse), int(240 * pulse)))
-        screen.blit(glow, glow.get_rect(center=(rect.centerx + 120, rect.y + 190)))
-        screen.blit(self.bulb_big, self.bulb_big.get_rect(
+        screen.blit(self.switch_off_big, self.switch_off_big.get_rect(
             center=(rect.centerx + 120, rect.y + 188)))
         bounce = abs(math.sin(now * 4)) * 10
         screen.blit(self.head_big, self.head_big.get_rect(
             center=(rect.centerx - 130, rect.y + 190 - bounce)))
-        self._lines(screen, ["Ты настоящий друг энергии!",
-                             f"Собрано выключателей: {score}"], 390, 32,
+        self._lines(screen, ["Весь свет в домиках выключен!",
+                             f"Выключено окон: {score} из {ds.WIN_SCORE}"], 390, 32,
                     (52, 86, 40))
         button = self.buttons["again"]
         button.draw(screen, button.rect.collidepoint(mouse))

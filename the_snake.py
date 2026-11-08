@@ -1,6 +1,6 @@
-"""Игра «Изгиб Питона» — змейка Питоша ищет лампочки и зажигает окна.
+"""Игра «Изгиб Питона» — Питоша собирает выключатели и гасит свет.
 
-Игровая механика классическая: змейка ест лампочки, растёт и не должна
+Игровая механика классическая: змейка собирает выключатели, растёт и не должна
 кусать свой хвост. Оформление и эффекты вынесены в visuals.py, а настройки
 дизайна — в design.py.
 """
@@ -371,8 +371,8 @@ class Game:
         self.finish_timer = 0.0
         self.light_effect.active = False
         self.light.reset()
-        self.dark_tip_pending = False
         self.background.set_lit(len(self.background.windows))
+        self.background.ramp[:] = self.background.target
         self.ui.tip.set_text(ds.DEFAULT_TIP)
         update_caption(self.snake, self.score)
 
@@ -422,7 +422,7 @@ class Game:
             update_caption(snake, self.score)
 
     def collect_switch(self) -> None:
-        """Змейка собрала выключатель: рост, щелчок, свет гаснет на 5 секунд."""
+        """Собрать выключатель и навсегда погасить ещё одно окно в партии."""
         snake = self.snake
         switch_px = (
             (self.apple.position[0] + 0.5) * GRID_SIZE,
@@ -430,6 +430,8 @@ class Game:
         )
         snake.grow()
         self.score += 1
+        self.light.switch_off()
+        self.background.set_lit(ds.WIN_SCORE - self.score)
         self.level = min(
             len(ds.STEP_MS_BY_LEVEL), 1 + self.score // ds.LAMPS_PER_LEVEL
         )
@@ -449,31 +451,13 @@ class Game:
         if self.score >= ds.WIN_SCORE:
             self.state = "celebrating"
             self.finish_timer = 2.4
-            self.light.force_on()
-            self.dark_tip_pending = False
             self.ui.tip.set_text(ds.WIN_TIP)
-            self.light_effect.trigger(switch_px, self.head_pixel())
             return
 
-        self.light.switch_off()  # повторный сбор снова запускает 5 секунд
         self.ui.tip.set_text(ds.PICK_TIPS[self.tip_index % len(ds.PICK_TIPS)])
-        self.dark_tip_pending = True
+        self.tip_index += 1
         self.apple.randomize_position(snake.get_positions_set())
         self.switch_renderer.respawn(self.now)
-
-    def update_light(self, dt: float) -> None:
-        """Обновить свет: таймер выключения и подсказки по ситуации."""
-        event = self.light.update(dt)
-        if self.dark_tip_pending and self.light.remaining <= ds.DARK_TIP_AT:
-            self.dark_tip_pending = False
-            tips = ds.DARK_TIPS
-            self.ui.tip.set_text(tips[self.tip_index % len(tips)])
-            self.tip_index += 1
-        if event == "on":
-            self.dark_tip_pending = False
-            self.ui.tip.set_text(ds.DEFAULT_TIP)
-            head = self.head_pixel()
-            self.light_effect.trigger(head, head)
 
     def update(self, dt: float) -> None:
         """Обновить игру и все анимации за кадр длиной dt секунд."""
@@ -497,9 +481,6 @@ class Game:
             if self.finish_timer <= 0:
                 self.state = "won"
 
-        if self.state in ("playing", "celebrating"):
-            self.update_light(dt)  # на паузе отсчёт света стоит
-
         self.background.update(dt)
         self.click_effect.update(dt)
         self.snake_renderer.update(dt)
@@ -515,12 +496,11 @@ class Game:
         field = self.field_surface
         mouse = pygame.mouse.get_pos()
 
-        darkness = self.light.darkness
-        self.background.draw(surface, darkness)
-        self.background.draw_night(surface, darkness)
+        self.background.draw(surface)
         self.background.draw_mist(field)
         self.light_effect.draw_under(field)
-        self.switch_renderer.draw(field, self.apple.position, self.now, darkness)
+        if self.state not in ("celebrating", "won"):
+            self.switch_renderer.draw(field, self.apple.position, self.now)
         self.click_effect.draw(field)
         self.snake_renderer.draw(field, self.snake, self.progress)
         self.particles.draw(field)
