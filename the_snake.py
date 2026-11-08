@@ -463,6 +463,8 @@ class Game:
         """Обновить игру и все анимации за кадр длиной dt секунд."""
         self.now += dt
         self.music.update(dt)
+        if self.state in ("playing", "celebrating"):
+            self.light.update(dt)
         if self.state == "playing":
             self.step_acc += dt * 1000
             if self.step_acc >= self.step_ms:
@@ -496,7 +498,7 @@ class Game:
         field = self.field_surface
         mouse = pygame.mouse.get_pos()
 
-        self.background.draw(surface)
+        self.background.draw(surface, self.light.darkness)
         self.background.draw_mist(field)
         self.light_effect.draw_under(field)
         if self.state not in ("celebrating", "won"):

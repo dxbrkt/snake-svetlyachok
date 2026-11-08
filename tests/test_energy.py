@@ -48,3 +48,33 @@ def test_light_does_not_return_after_five_seconds(game):
     assert sum(game.background.ramp) == 11
     assert not game.light_effect.active
     assert "сбережено" in game.ui.tip.text
+
+
+def test_day_night_morning_cycle_repeats(game):
+    light = game.light
+    assert light.darkness == 0
+    for count in (1, 2):
+        game.collect_switch()
+        light.update(0.8)
+        assert light.darkness == 1
+        light.update(4.2)
+        assert light.darkness == 1
+        light.update(0.75)
+        assert 0 < light.darkness < 1
+        light.update(0.75)
+        assert light.darkness == 0
+        assert light.off_count == count
+
+
+def test_pause_freezes_night_and_restart_returns_day(game):
+    game.start()
+    game.collect_switch()
+    game.light.update(1)
+    game.toggle_pause()
+    remaining = game.light.remaining
+    game.update(10)
+    assert game.light.remaining == remaining
+    assert game.light.darkness == 1
+    game.restart()
+    assert game.light.darkness == 0
+    assert game.light.remaining == 0

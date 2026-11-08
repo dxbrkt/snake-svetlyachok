@@ -384,6 +384,8 @@ class LightController:
     def __init__(self) -> None:
         """В начале партии все окна горят."""
         self.off_count = 0
+        self.remaining = 0.0
+        self.darkness = 0.0
 
     @property
     def is_off(self) -> bool:
@@ -398,10 +400,21 @@ class LightController:
     def switch_off(self) -> None:
         """Погасить ещё одно окно до конца партии."""
         self.off_count = min(ds.WIN_SCORE, self.off_count + 1)
+        self.remaining = ds.NIGHT_DURATION
 
     def reset(self) -> None:
         """Начать новую партию с включённым светом."""
         self.off_count = 0
+        self.remaining = 0.0
+        self.darkness = 0.0
+
+    def update(self, dt: float) -> None:
+        """После выключения наступает ночь, через пять секунд — утро."""
+        night_dt = min(dt, self.remaining)
+        self.remaining = max(0.0, self.remaining - dt)
+        self.darkness = min(1.0, self.darkness + night_dt / ds.NIGHT_FADE_TIME)
+        morning_dt = dt - night_dt
+        self.darkness = max(0.0, self.darkness - morning_dt / ds.MORNING_FADE_TIME)
 
 
 # --- Выключатель ------------------------------------------------------------
@@ -646,6 +659,7 @@ class BackgroundRenderer:
     def __init__(self, assets: Assets) -> None:
         """Подготовить фон, окна, мерцающие звёзды и лёгкий туман."""
         self.background = assets.background
+        self.night_background = assets.background.copy()
         self.windows = assets.windows
         self.ramp = [0.0] * len(self.windows)
         self.target = [0.0] * len(self.windows)
@@ -685,11 +699,14 @@ class BackgroundRenderer:
             elif self.ramp[i] > goal:
                 self.ramp[i] = max(goal, self.ramp[i] - step * 3)
 
-    def draw(self, screen: pygame.Surface) -> None:
-        """Светлый лес и окна, которые гаснут по одному."""
+    def draw(self, screen: pygame.Surface, darkness: float = 0.0) -> None:
+        """Плавная смена дневного и ночного леса после выключения."""
         screen.blit(self.background, (0, 0))
+        if darkness > 0:
+            self.night_background.set_alpha(round(255 * darkness))
+            screen.blit(self.night_background, (0, 0))
         for i, (image, pos, center) in enumerate(self.windows):
-            ramp = self.ramp[i]
+            ramp = self.ramp[i] * (1 - darkness)
             if ramp <= 0.01:
                 continue
             self.spill.set_alpha(int(255 * clamp01(ramp)))
