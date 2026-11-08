@@ -15,6 +15,7 @@ from typing import ClassVar, Dict, Optional, Tuple
 import pygame
 
 import design as ds
+from music import MusicPlayer
 from design import (
     BOARD_BACKGROUND_COLOR,
     FPS,
@@ -348,6 +349,7 @@ class Game:
         self.light = LightController()
         self.snake_renderer = SnakeRenderer(self.assets)
         self.ui = GameUI(self.assets)
+        self.music = MusicPlayer(self.assets)
         self.field_surface: Optional[pygame.Surface] = None
         self.now = 0.0
         self.swipe_from: Optional[Tuple[int, int]] = None
@@ -476,6 +478,7 @@ class Game:
     def update(self, dt: float) -> None:
         """Обновить игру и все анимации за кадр длиной dt секунд."""
         self.now += dt
+        self.music.update(dt)
         if self.state == "playing":
             self.step_acc += dt * 1000
             if self.step_acc >= self.step_ms:
@@ -539,6 +542,8 @@ class Game:
         elif self.state == "won":
             self.ui.draw_win(surface, self.score, self.now, mouse)
 
+        self.music.draw(surface, mouse)
+
 
 def quit_game() -> None:
     """Закрыть игру."""
@@ -555,6 +560,11 @@ def handle_keys(game: Game) -> None:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             quit_game()
+
+        if game.music.handle_event(event):
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                game.swipe_from = None
+            continue
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             handle_click(game, event.pos)
