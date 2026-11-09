@@ -74,8 +74,13 @@ KEY_ALIASES = {
 }
 ARROW_KEYS = (pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT)
 
-pygame.init()
 IS_WEB = sys.platform == "emscripten"
+if IS_WEB:
+    # Web music uses HTMLAudioElement; do not open an unused SDL audio stream.
+    pygame.display.init()
+    pygame.font.init()
+else:
+    pygame.init()
 try:
     screen = pygame.display.set_mode(
         SCREEN_SIZE, 0 if IS_WEB else pygame.SCALED
@@ -644,7 +649,7 @@ def main() -> None:
         clock.tick(FPS)
 
 
-a
+
 async def main_web() -> None:
     """Запустить игру в браузере с неблокирующим игровым циклом."""
     pygame.display.set_caption(WINDOW_TITLE)
@@ -669,6 +674,6 @@ async def main_web() -> None:
 
         await asyncio.sleep(max(0.0, remaining))
 
-        
+
 if __name__ == "__main__":
     main()

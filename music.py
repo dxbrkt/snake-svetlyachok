@@ -1,14 +1,16 @@
 """Лесное радио: потоковое воспроизведение и компактный плеер Pygame."""
 
 import math
+import json
+import sys
 import pygame
 import design as ds
 from visuals import wood_panel, wrap_text
 
 TRACKS = (
-    ("Змейка", "snake.mp3", 102.36),
-    ("Змейка и выключатель", "snake-and-switch.mp3", 132.432),
-    ("Песня игры", "game-song.mp3", 174.984),
+    ("Змейка", "snake.ogg", 102.36),
+    ("Змейка и выключатель", "snake-and-switch.ogg", 132.432),
+    ("Песня игры", "game-song.ogg", 174.984),
 )
 
 class MusicPlayer:
@@ -38,10 +40,21 @@ class MusicPlayer:
         }
         self.volume_rect = pygame.Rect(1110, 539, 134, 24)
         self.texts = {}
+        self.web_audio = None
+        if sys.platform == "emscripten":
+            import platform
+            self.web_audio = platform.window.snakeRadio
+            self.web_audio.configure(json.dumps({
+                "tracks": ["audio/" + track[1] for track in TRACKS],
+                "buttons": {name: list(rect) for name, rect in self.buttons.items()},
+                "volume": self.volume,
+            }))
 
     @property
     def position(self):
         """Время трека, включая уже проигранное перед паузой."""
+        if self.web_audio is not None:
+            return float(self.web_audio.position)
         if not self.playing:
             return min(self.track_duration, self.elapsed)
         running = (pygame.time.get_ticks() - self.started_at) / 1000
@@ -49,12 +62,15 @@ class MusicPlayer:
 
     def _prepare(self):
         if not pygame.mixer.get_init():
-            # Оптимальный буфер для предотвращения хрипов в веб-окружении
+            # Буфер настольного SDL-плеера; веб использует HTMLAudioElement.
             pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=4096)
         pygame.mixer.music.set_volume(self.volume)
 
     def play(self):
         """Запустить выбранный трек или продолжить после паузы."""
+        if self.web_audio is not None:
+            self.web_audio.play()
+            return
         try:
             self._prepare()
             self.track_duration = TRACKS[self.index][2]
@@ -78,6 +94,9 @@ class MusicPlayer:
 
     def toggle(self):
         """Пауза музыки не ставит на паузу саму игру."""
+        if self.web_audio is not None:
+            self.web_audio.toggle()
+            return
         if self.playing:
             self.elapsed = self.position
             pygame.mixer.music.pause()
@@ -87,6 +106,9 @@ class MusicPlayer:
 
     def change_track(self, step):
         """Переключить трек по кругу и начать его с начала."""
+        if self.web_audio is not None:
+            self.web_audio.change(step)
+            return
         if pygame.mixer.get_init():
             pygame.mixer.music.stop()
         
@@ -100,11 +122,16 @@ class MusicPlayer:
     def set_volume(self, value):
         """Изменить громкость от нуля до единицы."""
         self.volume = max(0.0, min(1.0, value))
-        if pygame.mixer.get_init():
+        if self.web_audio is not None:
+            self.web_audio.setVolume(self.volume)
+        elif pygame.mixer.get_init():
             pygame.mixer.music.set_volume(self.volume)
 
     def handle_event(self, event):
         """Поглотить ввод плеера, чтобы он не управлял змейкой."""
+        if self.web_audio is not None and event.type == pygame.KEYDOWN:
+            if event.key in (pygame.K_m, pygame.K_LEFTBRACKET, pygame.K_RIGHTBRACKET):
+                return True  # Handled synchronously by the browser gesture listener.
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_m:
                 self.toggle()
@@ -121,6 +148,8 @@ class MusicPlayer:
                 return False
             for name, rect in self.buttons.items():
                 if rect.collidepoint(event.pos):
+                    if self.web_audio is not None:
+                        return True
                     if name == "play":
                         self.toggle()
                     else:
@@ -147,6 +176,14 @@ class MusicPlayer:
 
     def update(self, dt):
         """Двигать пластинку и проверять завершение трека по времени."""
+        if self.web_audio is not None:
+            self.index = int(self.web_audio.index)
+            self.playing = bool(self.web_audio.playing)
+            self.error = bool(self.web_audio.error)
+            self.track_duration = TRACKS[self.index][2]
+            if self.playing:
+                self.phase += dt
+            return
         if self.playing:
             self.phase += dt
             # Безопасный автопереход: если текущее время превысило длину трека, переключаем дальше

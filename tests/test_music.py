@@ -47,14 +47,17 @@ def test_music_pause_preserves_time_and_game_state(game, monkeypatch):
     assert player.position == 3
 
 
-def test_end_event_advances_only_while_playing(game):
+def test_track_advances_only_while_playing(game, monkeypatch):
+    tick = [1000]
+    monkeypatch.setattr(pygame.time, "get_ticks", lambda: tick[0])
     player = game.music
     player.play()
-    event = pygame.event.Event(player.end_event)
-    assert player.handle_event(event)
+    tick[0] += int(player.track_duration * 1000) + 1
+    player.update(0.016)
     assert player.index == 1 and player.playing
     player.toggle()
-    player.handle_event(event)
+    tick[0] += 999999
+    player.update(0.016)
     assert player.index == 1 and not player.playing
 
 

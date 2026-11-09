@@ -19,6 +19,23 @@ PY
 SSL_CERT_FILE="$(venv/bin/python -m certifi)" venv/bin/pygbag --build --ume_block 0 build/webgame
 rm -rf build/web
 cp -R build/webgame/build/web build/web
+# Browser media needs real HTTP URLs, not files inside the WASM archive.
+mkdir -p build/web/audio
+cp assets/music/*.ogg build/web/audio/
+cp web/audio.js build/web/audio.js
+venv/bin/python - <<'PYWEB'
+from pathlib import Path
+from hashlib import sha256
+root = Path("build/web")
+page = root / "index.html"
+version = sha256((root / "webgame.tar.gz").read_bytes()
+                 + (root / "audio.js").read_bytes()).hexdigest()[:12]
+html = page.read_text().replace(
+    '<script src=', f'<script src="audio.js?v={version}"></script><script src=', 1)
+for archive in ("webgame.apk", "webgame.tar.gz"):
+    html = html.replace(f'"{archive}"', f'"{archive}?v={version}"')
+page.write_text(html)
+PYWEB
 touch build/web/.nojekyll
 rm -rf docs
 cp -R build/web docs
