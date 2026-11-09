@@ -884,8 +884,8 @@ class GameUI:
 
         rect = self.counter_panel.get_rect(center=(ds.SCREEN_WIDTH // 2, 48))
         screen.blit(self.counter_panel, rect)
-        counter = f"ОКНА: {score} / {ds.WIN_SCORE}" if mode == "village" else f"ВЫКЛЮЧЕНО: {score}"
-        label = self._text(counter, 30, ds.TEXT_DARK)
+        counter = f"Выключатели: {score} / {ds.WIN_SCORE}" if mode == "village" else f"Выключатели: {score}"
+        label = self._text(counter, 23, ds.TEXT_DARK)
         screen.blit(label, label.get_rect(center=rect.center))
         if mode == "endless":
             record = self._text(f"Личный рекорд: {best}", 20, ds.CREAM)
@@ -936,7 +936,7 @@ class GameUI:
                              border_radius=18)
             color = ds.CREAM if selected else ds.TEXT_DARK
             title = "Спасти деревню" if key == "village" else "Бесконечная ночь"
-            detail = "Выключи все 12 окон" if key == "village" else "До самоукуса · на рекорд"
+            detail = "Собери 12 выключателей" if key == "village" else "До самоукуса · на рекорд"
             footer = "1 · " if key == "village" else "2 · "
             footer += "Выбрано" if selected else "Выбрать"
             for text, y, size in ((title, box.y + 26, 25), (detail, box.y + 61, 19),
@@ -945,7 +945,7 @@ class GameUI:
                 screen.blit(label, label.get_rect(center=(box.centerx, y)))
         hint = "Стрелки / WASD / свайпы · Enter — играть"
         if mode == "endless":
-            hint = f"Рекорд: {best} · Каждые 12 окон — новая деревня"
+            hint = f"Рекорд: {best} · 12 выключателей — новая деревня"
         self._lines(screen, [hint], 508, 19)
         self.buttons["start"].draw(screen, self.buttons["start"].rect.collidepoint(mouse))
 
@@ -969,9 +969,9 @@ class GameUI:
         bounce = abs(math.sin(now * 4)) * 10
         screen.blit(self.head_big, self.head_big.get_rect(
             center=(rect.centerx - 130, rect.y + 190 - bounce)))
-        lines = (["Вся деревня бережёт энергию!", f"Выключено окон: {score} из {ds.WIN_SCORE}"]
+        lines = (["Вся деревня бережёт энергию!", f"Выключатели: {score} из {ds.WIN_SCORE}"]
                  if state == "won" else
-                 [f"Выключено окон: {score}", f"Личный рекорд: {best}"])
+                 [f"Выключатели: {score}", f"Личный рекорд: {best}"])
         self._lines(screen, lines, 390, 29, (52, 86, 40))
         button = self.buttons["again"]
         button.draw(screen, button.rect.collidepoint(mouse))
