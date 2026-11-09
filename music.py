@@ -5,7 +5,6 @@ import pygame
 import design as ds
 from visuals import wood_panel, wrap_text
 
-# Для веб-версии MP3 весит мало, так что загружаем треки целиком в память
 TRACKS = (
     ("Змейка", "snake.mp3", 102.36),
     ("Змейка и выключатель", "snake-and-switch.mp3", 132.432),
@@ -21,6 +20,7 @@ class MusicPlayer:
         self.panel = wood_panel(self.rect.size, 24, ds.DEEP_TEAL, ds.WOOD, 31)
         self.index = 0
         self.playing = False
+        self.loaded = False
         self.error = False
         self.volume = 0.55
         self.elapsed = 0.0
@@ -28,9 +28,8 @@ class MusicPlayer:
         self.phase = 0.0
         self.dragging = False
         
-        # Вместо music.set_endevent используем стандартный канал
-        self.channel = None 
-        self.sound_cache = {}  # Кэшируем треки, чтобы не загружать их заново
+        # Переменные для контроля автоперехода без использования end_event
+        self.track_duration = TRACKS[self.index][2]
         
         self.buttons = {
             "previous": pygame.Rect(1104, 440, 44, 44),
@@ -44,59 +43,55 @@ class MusicPlayer:
     def position(self):
         """Время трека, включая уже проигранное перед паузой."""
         if not self.playing:
-            return min(TRACKS[self.index][2], self.elapsed)
+            return min(self.track_duration, self.elapsed)
         running = (pygame.time.get_ticks() - self.started_at) / 1000
-        return min(TRACKS[self.index][2], self.elapsed + running)
+        return min(self.track_duration, self.elapsed + running)
 
     def _prepare(self):
         if not pygame.mixer.get_init():
+            # Оптимальный буфер для предотвращения хрипов в веб-окружении
             pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=4096)
-        if self.channel is None:
-            # Резервируем первый канал чисто под радио
-            self.channel = pygame.mixer.Channel(0)
+        pygame.mixer.music.set_volume(self.volume)
 
     def play(self):
         """Запустить выбранный трек или продолжить после паузы."""
         try:
             self._prepare()
+            self.track_duration = TRACKS[self.index][2]
             
-            # Если трек уже загружен и был на паузе
-            if self.channel.get_busy() and not self.playing:
-                self.channel.unpause()
+            if self.loaded:
+                pygame.mixer.music.unpause()
             else:
-                # Если трека нет в кэше — загружаем как Sound объект
-                if self.index not in self.sound_cache:
-                    path = ds.ASSETS_DIR / "music" / TRACKS[self.index][1]
-                    self.sound_cache[self.index] = pygame.mixer.Sound(str(path))
-                
-                sound = self.sound_cache[self.index]
-                sound.set_volume(self.volume)
-                self.channel.play(sound)
+                path = ds.ASSETS_DIR / "music" / TRACKS[self.index][1]
+                pygame.mixer.music.load(str(path))
+                pygame.mixer.music.play()
+                self.loaded = True
                 self.elapsed = 0.0
-            
+                
             self.started_at = pygame.time.get_ticks()
             self.playing = True
             self.error = False
         except (pygame.error, OSError):
             self.playing = False
+            self.loaded = False
             self.error = True
 
     def toggle(self):
         """Пауза музыки не ставит на паузу саму игру."""
         if self.playing:
             self.elapsed = self.position
-            self._prepare()
-            self.channel.pause()
+            pygame.mixer.music.pause()
             self.playing = False
         else:
             self.play()
 
     def change_track(self, step):
         """Переключить трек по кругу и начать его с начала."""
-        self._prepare()
-        self.channel.stop()
+        if pygame.mixer.get_init():
+            pygame.mixer.music.stop()
         
         self.playing = False
+        self.loaded = False
         self.elapsed = 0.0
         
         self.index = (self.index + step) % len(TRACKS)
@@ -105,22 +100,22 @@ class MusicPlayer:
     def set_volume(self, value):
         """Изменить громкость от нуля до единицы."""
         self.volume = max(0.0, min(1.0, value))
-        if self.channel:
-            self.channel.set_volume(self.volume)
+        if pygame.mixer.get_init():
+            pygame.mixer.music.set_volume(self.volume)
 
     def handle_event(self, event):
         """Поглотить ввод плеера, чтобы он не управлял змейкой."""
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_m:
                 self.toggle()
+                return True
             elif event.key in (pygame.K_LEFTBRACKET, pygame.K_RIGHTBRACKET):
                 self.change_track(-1 if event.key == pygame.K_LEFTBRACKET else 1)
+                return True
             elif event.key in (pygame.K_MINUS, pygame.K_EQUALS):
                 self.set_volume(self.volume + (-0.05 if event.key == pygame.K_MINUS else 0.05))
-            else:
-                return False
-            return True
-            
+                return True
+                
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if not self.rect.collidepoint(event.pos):
                 return False
@@ -130,11 +125,12 @@ class MusicPlayer:
                         self.toggle()
                     else:
                         self.change_track(-1 if name == "previous" else 1)
+                    return True
             if self.volume_rect.collidepoint(event.pos):
                 self.dragging = True
                 self._drag_volume(event.pos[0])
-            return True
-            
+                return True
+                
         if event.type == pygame.MOUSEMOTION and self.dragging:
             self._drag_volume(event.pos[0])
             return True
@@ -143,21 +139,19 @@ class MusicPlayer:
             was_dragging = self.dragging
             self.dragging = False
             return was_dragging
+            
         return False
 
     def _drag_volume(self, x):
         self.set_volume((x - self.volume_rect.x) / self.volume_rect.width)
 
     def update(self, dt):
-        """Двигать пластинку и проверять автопереход трека."""
-        self._prepare()
-        
-        # Автопереход: если музыка должна играть, но канал затих — включаем следующий трек
-        if self.playing and not self.channel.get_busy():
-            self.change_track(1)
-            
+        """Двигать пластинку и проверять завершение трека по времени."""
         if self.playing:
             self.phase += dt
+            # Безопасный автопереход: если текущее время превысило длину трека, переключаем дальше
+            if self.position >= self.track_duration:
+                self.change_track(1)
 
     def _label(self, surface, text, size, color, center):
         key = (text, size, color)
@@ -216,12 +210,12 @@ class MusicPlayer:
         progress = pygame.Rect(1110, 500, 134, 4)
         pygame.draw.rect(surface, ds.NIGHT_TEAL, progress, border_radius=2)
         fill = progress.copy()
-        fill.width = int(progress.width * position / TRACKS[self.index][2])
+        fill.width = int(progress.width * position / self.track_duration)
         if fill.width:
             pygame.draw.rect(surface, ds.GOLD, fill, border_radius=2)
             
         self._label(surface, self._time(position), 12, ds.CREAM, (1125, 516))
-        self._label(surface, self._time(TRACKS[self.index][2]), 12, ds.CREAM, (1228, 516))
+        self._label(surface, self._time(self.track_duration), 12, ds.CREAM, (1228, 516))
         
         bar = pygame.Rect(1110, 549, 134, 5)
         pygame.draw.rect(surface, ds.NIGHT_TEAL, bar, border_radius=3)
