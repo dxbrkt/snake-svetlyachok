@@ -86,3 +86,20 @@
         else if (event.code === 'BracketRight') radio.change(1);
     }, {capture: true});
 })();
+
+// Best score survives reloads; disabled storage must never prevent playing.
+(() => {
+    let best = 0;
+    try {
+        const stored = Number(localStorage.getItem('snake.endless.best'));
+        if (Number.isSafeInteger(stored) && stored >= 0) best = stored;
+    } catch (_) {}
+    window.snakeScores = {
+        get best() { return best; },
+        save(score) {
+            if (!Number.isSafeInteger(score) || score <= best) return;
+            best = score;
+            try { localStorage.setItem('snake.endless.best', String(best)); } catch (_) {}
+        },
+    };
+})();

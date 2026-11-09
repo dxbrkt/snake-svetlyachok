@@ -359,6 +359,11 @@ class Game:
         self.now = 0.0
         self.swipe_from: Optional[Tuple[int, int]] = None
         self.state = "start"
+        self.mode = "village"
+        self.best = 0
+        if IS_WEB:
+            import platform
+            self.best = int(platform.window.snakeScores.best)
         self.praise_index = 0
         self.tip_index = 0
         self.new_game()
@@ -380,6 +385,30 @@ class Game:
         self.background.ramp[:] = self.background.target
         self.ui.tip.set_text(ds.DEFAULT_TIP)
         update_caption(self.snake, self.score)
+
+    @property
+    def village(self) -> int:
+        """Номер деревни в бесконечном режиме."""
+        return self.score // ds.WIN_SCORE + 1
+
+    def select_mode(self, mode: str) -> None:
+        """Выбрать режим до начала партии."""
+        if self.state == "start" and mode in ("village", "endless"):
+            self.mode = mode
+
+    def show_menu(self) -> None:
+        """Вернуться к выбору режима, не прерывая радио."""
+        self.new_game()
+        self.state = "start"
+        self.swipe_from = None
+
+    def save_best(self) -> None:
+        """Сохранить рекорд сразу, даже если вкладку закроют во время игры."""
+        if self.mode == "endless" and self.score > self.best:
+            self.best = self.score
+            if IS_WEB:
+                import platform
+                platform.window.snakeScores.save(self.best)
 
     # --- Управление состояниями --------------------------------------------
     def start(self) -> None:
@@ -419,7 +448,15 @@ class Game:
         if snake.get_head_position() == self.apple.position:
             self.collect_switch()
 
+        if self.mode == "endless" and not (ALL_CELLS - snake.get_positions_set()):
+            self.state = "full"
+            return
+
         if snake.has_self_collision():
+            if self.mode == "endless":
+                self.state = "lost"
+                self.ui.tip.set_text("Каждая попытка помогает сберечь больше энергии!")
+                return
             snake.reset()
             self.apple.randomize_position(snake.get_positions_set())
             self.switch_renderer.respawn(self.now)
@@ -436,7 +473,9 @@ class Game:
         snake.grow()
         self.score += 1
         self.light.switch_off()
-        self.background.set_lit(ds.WIN_SCORE - self.score)
+        self.save_best()
+        windows_off = self.score % ds.WIN_SCORE if self.mode == "endless" else self.score
+        self.background.set_lit(ds.WIN_SCORE - windows_off)
         self.level = min(
             len(ds.STEP_MS_BY_LEVEL), 1 + self.score // ds.LAMPS_PER_LEVEL
         )
@@ -453,13 +492,22 @@ class Game:
         self.ui.bubble.say(ds.PRAISES[self.praise_index])
         update_caption(snake, self.score)
 
-        if self.score >= ds.WIN_SCORE:
+        if self.mode == "village" and self.score >= ds.WIN_SCORE:
             self.state = "celebrating"
             self.finish_timer = 2.4
             self.ui.tip.set_text(ds.WIN_TIP)
             return
 
-        self.ui.tip.set_text(ds.PICK_TIPS[self.tip_index % len(ds.PICK_TIPS)])
+        if not (ALL_CELLS - snake.get_positions_set()):
+            self.state = "full"
+            self.ui.tip.set_text("Всё поле заполнено — невероятный результат!")
+            return
+
+        self.ui.tip.set_text(
+            f"Деревня {self.village}! Продолжаем беречь энергию."
+            if self.mode == "endless" and self.score % ds.WIN_SCORE == 0
+            else ds.PICK_TIPS[self.tip_index % len(ds.PICK_TIPS)]
+        )
         self.tip_index += 1
         self.apple.randomize_position(snake.get_positions_set())
         self.switch_renderer.respawn(self.now)
@@ -506,7 +554,7 @@ class Game:
         self.background.draw(surface, self.light.darkness)
         self.background.draw_mist(field)
         self.light_effect.draw_under(field)
-        if self.state not in ("celebrating", "won"):
+        if self.state not in ("celebrating", "won", "lost", "full"):
             self.switch_renderer.draw(field, self.apple.position, self.now)
         self.click_effect.draw(field)
         self.snake_renderer.draw(field, self.snake, self.progress)
@@ -516,18 +564,20 @@ class Game:
             self.state in ("playing", "paused")
             and self.ui.pause_rect.collidepoint(mouse)
         )
-        self.ui.draw_hud(surface, self.score, self.level, hover_pause, self.light)
+        self.ui.draw_hud(surface, self.score, self.level, hover_pause, self.light,
+                         self.mode, self.best, self.village)
         self.light_effect.draw_banner(surface)
         self.ui.click_banner.draw(surface)
         head = self.head_pixel()
         self.ui.bubble.draw(surface, head)
 
         if self.state == "start":
-            self.ui.draw_start(surface, self.now, mouse)
+            self.ui.draw_start(surface, self.now, mouse, self.mode, self.best)
         elif self.state == "paused":
             self.ui.draw_pause(surface, mouse)
-        elif self.state == "won":
-            self.ui.draw_win(surface, self.score, self.now, mouse)
+        elif self.state in ("won", "lost", "full"):
+            self.ui.draw_win(surface, self.score, self.now, mouse,
+                             self.state, self.best)
 
         self.music.draw(surface, mouse)
 
@@ -570,10 +620,16 @@ def handle_keys(game: Game) -> None:
         if event.key == pygame.K_ESCAPE:
             if game.state == "playing":
                 game.toggle_pause()
-            else:
-                quit_game()
+            elif game.state != "start":
+                game.show_menu()
         elif game.state == "start":
-            if confirm or key in ARROW_KEYS:
+            if event.key in (pygame.K_1, pygame.K_2, pygame.K_TAB):
+                game.select_mode(
+                    "village" if event.key == pygame.K_1 else
+                    "endless" if event.key == pygame.K_2 else
+                    "endless" if game.mode == "village" else "village"
+                )
+            elif confirm or key in ARROW_KEYS:
                 game.start()
                 if key in ARROW_KEYS:
                     game.snake.set_next_direction(key)
@@ -585,7 +641,7 @@ def handle_keys(game: Game) -> None:
         elif game.state == "paused":
             if confirm or event.key == pygame.K_p:
                 game.toggle_pause()
-        elif game.state == "won":
+        elif game.state in ("won", "lost", "full"):
             if confirm:
                 game.restart()
 
@@ -619,11 +675,18 @@ def handle_click(game: Game, position: Tuple[int, int]) -> None:
         position: Координаты щелчка.
     """
     buttons = game.ui.buttons
-    if game.state == "start" and buttons["start"].rect.collidepoint(position):
+    if game.state == "start":
+        for mode, rect in game.ui.mode_rects.items():
+            if rect.collidepoint(position):
+                game.select_mode(mode)
+                return
+    if game.state in ("paused", "won", "lost", "full") and buttons["menu"].rect.collidepoint(position):
+        game.show_menu()
+    elif game.state == "start" and buttons["start"].rect.collidepoint(position):
         game.start()
     elif game.state == "paused" and buttons["resume"].rect.collidepoint(position):
         game.toggle_pause()
-    elif game.state == "won" and buttons["again"].rect.collidepoint(position):
+    elif game.state in ("won", "lost", "full") and buttons["again"].rect.collidepoint(position):
         game.restart()
     elif game.state in ("playing", "paused") and game.ui.pause_rect.collidepoint(
         position

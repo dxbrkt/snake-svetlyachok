@@ -838,8 +838,13 @@ class GameUI:
         self.head_big = pygame.transform.smoothscale(assets.head, (176, 127))
         self.buttons = {
             "start": Button(assets, "Играть", (640, 566)),
-            "resume": Button(assets, "Продолжить", (640, 566)),
-            "again": Button(assets, "Играть снова", (640, 566), 340),
+            "resume": Button(assets, "Продолжить", (485, 550), 270),
+            "again": Button(assets, "Ещё раз", (485, 550), 270),
+            "menu": Button(assets, "Выбор режима", (800, 550), 300),
+        }
+        self.mode_rects = {
+            "village": pygame.Rect(320, 370, 305, 114),
+            "endless": pygame.Rect(655, 370, 305, 114),
         }
         self.texts: Dict[Tuple[str, int, Color], pygame.Surface] = {}
 
@@ -871,26 +876,24 @@ class GameUI:
             self.bump += dt
 
     def draw_hud(self, screen: pygame.Surface, score: int, level: int,
-                 hover_pause: bool, light: LightController) -> None:
+                 hover_pause: bool, light: LightController, mode: str = "village",
+                 best: int = 0, village: int = 1) -> None:
         """Верхняя панель, индикатор света, подсказка и кнопка паузы."""
         screen.blit(self.leaf_big, (26, 24))
         screen.blit(self.title, (84, 22))
 
         rect = self.counter_panel.get_rect(center=(ds.SCREEN_WIDTH // 2, 48))
         screen.blit(self.counter_panel, rect)
-        label = self._text("ВЫКЛЮЧЕНО", 27, ds.TEXT_DARK)
-        screen.blit(label, label.get_rect(midleft=(rect.x + 26, rect.centery - 3)))
-        number = self._text(f"{score}", 40, (150, 70, 10))
-        if self.bump < ds.COUNTER_BUMP_TIME:
-            k = 1 + 0.35 * math.sin(math.pi * self.bump / ds.COUNTER_BUMP_TIME)
-            number = pygame.transform.smoothscale(
-                number, (int(number.get_width() * k), int(number.get_height() * k))
-            )
-        screen.blit(number, number.get_rect(center=(rect.right - 52, rect.centery - 3)))
+        counter = f"ОКНА: {score} / {ds.WIN_SCORE}" if mode == "village" else f"ВЫКЛЮЧЕНО: {score}"
+        label = self._text(counter, 30, ds.TEXT_DARK)
+        screen.blit(label, label.get_rect(center=rect.center))
+        if mode == "endless":
+            record = self._text(f"Личный рекорд: {best}", 20, ds.CREAM)
+            screen.blit(record, record.get_rect(center=(640, 94)))
 
         level_rect = self.level_panel.get_rect(topright=(ds.SCREEN_WIDTH - 36, 22))
         screen.blit(self.level_panel, level_rect)
-        level_label = self._text(f"УРОВЕНЬ {level}", 27, ds.CREAM)
+        level_label = self._text(f"ДЕРЕВНЯ {village}" if mode == "endless" else f"УРОВЕНЬ {level}", 23, ds.CREAM)
         screen.blit(level_label, level_label.get_rect(center=level_rect.center))
 
         self.tip.draw(screen)
@@ -917,21 +920,33 @@ class GameUI:
                                                       top + i * (size + 12))))
 
     def draw_start(self, screen: pygame.Surface, now: float,
-                   mouse: Tuple[int, int]) -> None:
-        """Стартовый экран: знакомство со змейкой."""
+                   mouse: Tuple[int, int], mode: str = "village", best: int = 0) -> None:
+        """Выбор цели перед началом игры, мышью или клавишами 1 / 2."""
         rect = self._panel_with_title(screen, ds.GAME_TITLE)
         bob = 4 * math.sin(now * 3)
-        screen.blit(self.head_big, self.head_big.get_rect(
-            center=(rect.centerx - 150, rect.y + 188 + bob)))
-        screen.blit(self.glow, self.glow.get_rect(center=(rect.centerx + 140,
-                                                         rect.y + 190)))
-        screen.blit(self.switch_big, self.switch_big.get_rect(
-            center=(rect.centerx + 140, rect.y + 190 - bob)))
-        self._lines(screen, [f"Привет! Я {ds.SNAKE_NAME}.",
-                             "Гаси свет в домиках —",
-                             "береги электричество!"], 392, 28)
-        hint = self._text("Управление: стрелки на клавиатуре", 22, (110, 80, 40))
-        screen.blit(hint, hint.get_rect(center=(rect.centerx, rect.bottom - 100)))
+        screen.blit(self.head_big, self.head_big.get_rect(center=(490, 275 + bob)))
+        screen.blit(self.switch_big, self.switch_big.get_rect(center=(790, 275 - bob)))
+        self._lines(screen, ["Гаси свет в домиках — береги энергию!"], 344, 23)
+        for key, box in self.mode_rects.items():
+            selected = mode == key
+            fill = ds.DEEP_TEAL if selected else (228, 211, 171)
+            pygame.draw.rect(screen, fill, box, border_radius=18)
+            pygame.draw.rect(screen, ds.GOLD if selected else ds.WOOD,
+                             box, 3 if selected or box.collidepoint(mouse) else 1,
+                             border_radius=18)
+            color = ds.CREAM if selected else ds.TEXT_DARK
+            title = "Спасти деревню" if key == "village" else "Бесконечная ночь"
+            detail = "Выключи все 12 окон" if key == "village" else "До самоукуса · на рекорд"
+            footer = "1 · " if key == "village" else "2 · "
+            footer += "Выбрано" if selected else "Выбрать"
+            for text, y, size in ((title, box.y + 26, 25), (detail, box.y + 61, 19),
+                                  (footer, box.y + 92, 16)):
+                label = self._text(text, size, color)
+                screen.blit(label, label.get_rect(center=(box.centerx, y)))
+        hint = "Стрелки / WASD / свайпы · Enter — играть"
+        if mode == "endless":
+            hint = f"Рекорд: {best} · Каждые 12 окон — новая деревня"
+        self._lines(screen, [hint], 508, 19)
         self.buttons["start"].draw(screen, self.buttons["start"].rect.collidepoint(mouse))
 
     def draw_pause(self, screen: pygame.Surface, mouse: Tuple[int, int]) -> None:
@@ -942,18 +957,22 @@ class GameUI:
         self._lines(screen, ["Питоша отдыхает.", "Нажми «Продолжить»!"], 392, 30)
         button = self.buttons["resume"]
         button.draw(screen, button.rect.collidepoint(mouse))
+        self.buttons["menu"].draw(screen, self.buttons["menu"].rect.collidepoint(mouse))
 
     def draw_win(self, screen: pygame.Surface, score: int, now: float,
-                 mouse: Tuple[int, int]) -> None:
-        """Экран победы."""
-        rect = self._panel_with_title(screen, "Ура! Ты победил!")
+                 mouse: Tuple[int, int], state: str = "won", best: int = 0) -> None:
+        """Итог обычной или бесконечной партии."""
+        title = "Ура! Ты победил!" if state == "won" else "Всё поле твоё!" if state == "full" else "Хорошая попытка!"
+        rect = self._panel_with_title(screen, title)
         screen.blit(self.switch_off_big, self.switch_off_big.get_rect(
             center=(rect.centerx + 120, rect.y + 188)))
         bounce = abs(math.sin(now * 4)) * 10
         screen.blit(self.head_big, self.head_big.get_rect(
             center=(rect.centerx - 130, rect.y + 190 - bounce)))
-        self._lines(screen, ["Весь свет в домиках выключен!",
-                             f"Выключено окон: {score} из {ds.WIN_SCORE}"], 390, 32,
-                    (52, 86, 40))
+        lines = (["Вся деревня бережёт энергию!", f"Выключено окон: {score} из {ds.WIN_SCORE}"]
+                 if state == "won" else
+                 [f"Выключено окон: {score}", f"Личный рекорд: {best}"])
+        self._lines(screen, lines, 390, 29, (52, 86, 40))
         button = self.buttons["again"]
         button.draw(screen, button.rect.collidepoint(mouse))
+        self.buttons["menu"].draw(screen, self.buttons["menu"].rect.collidepoint(mouse))

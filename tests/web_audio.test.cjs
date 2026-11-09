@@ -63,3 +63,22 @@ test('blocked playback reports failure, stale rejection cannot override new trac
     radio.play(); audio.reject = null; radio.change(1);
     await Promise.resolve(); assert.equal(radio.error, false); assert.equal(radio.playing, true);
 });
+
+test('record survives reload, rejects malformed data, tolerates blocked storage', () => {
+    const saved = new Map();
+    const storage = {getItem: key => saved.get(key) ?? null,
+        setItem: (key, value) => saved.set(key, value)};
+    const code = fs.readFileSync('web/audio.js', 'utf8').split('// Best score survives reloads;')[1];
+    function reload(localStorage) {
+        const context = {window: {}, localStorage};
+        vm.runInNewContext('// Best score survives reloads;' + code, context);
+        return context.window.snakeScores;
+    }
+    let scores = reload(storage);
+    scores.save(23); scores.save(10);
+    assert.equal(reload(storage).best, 23);
+    saved.set('snake.endless.best', 'oops');
+    assert.equal(reload(storage).best, 0);
+    scores = reload({getItem() {throw Error('blocked');}, setItem() {throw Error('blocked');}});
+    scores.save(12); assert.equal(scores.best, 12);
+});
