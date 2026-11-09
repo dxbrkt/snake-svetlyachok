@@ -644,16 +644,31 @@ def main() -> None:
         clock.tick(FPS)
 
 
+a
 async def main_web() -> None:
-    """Запустить игру в браузере (pygbag): цикл отдаёт управление браузеру."""
+    """Запустить игру в браузере с неблокирующим игровым циклом."""
     pygame.display.set_caption(WINDOW_TITLE)
     game = Game()
 
+    last_frame = pygame.time.get_ticks()
+    frame_duration = 1.0 / FPS
+
     while True:
-        run_frame(game)
-        clock.tick(FPS)
-        await asyncio.sleep(0)
+        frame_start = pygame.time.get_ticks()
 
+        dt = min((frame_start - last_frame) / 1000.0, 0.05)
+        last_frame = frame_start
 
+        handle_keys(game)
+        game.update(dt)
+        game.draw(screen)
+        pygame.display.flip()
+
+        elapsed = (pygame.time.get_ticks() - frame_start) / 1000.0
+        remaining = frame_duration - elapsed
+
+        await asyncio.sleep(max(0.0, remaining))
+
+        
 if __name__ == "__main__":
     main()
