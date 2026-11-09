@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Tuple
 import pygame
 
 import design as ds
-from snake_art import SnakeRenderer, make_head
+from snake_art import SnakeRenderer, make_head, SKINS
 
 Color = Tuple[int, int, int]
 Point = Tuple[float, float]
@@ -837,16 +837,55 @@ class GameUI:
         self.glow = build_glow(120, ds.GOLD, 200)
         self.head_big = pygame.transform.smoothscale(assets.head, (176, 127))
         self.buttons = {
+            "skin_back": Button(assets, "Готово", (640, 555), 260),
             "start": Button(assets, "Играть", (640, 566)),
             "resume": Button(assets, "Продолжить", (485, 550), 270),
             "again": Button(assets, "Ещё раз", (485, 550), 270),
             "menu": Button(assets, "Выбор режима", (800, 550), 300),
         }
+        self.skins_button = pygame.Rect(354, 305, 272, 48)
+        self.skin_rects = {key: pygame.Rect(315 + i * 165, 235, 155, 214)
+                           for i, key in enumerate(SKINS)}
+        self.skin_previews = {key: pygame.transform.smoothscale(make_head(skin=key), (150, 120))
+                              for key in SKINS}
         self.mode_rects = {
             "village": pygame.Rect(320, 370, 305, 114),
             "endless": pygame.Rect(655, 370, 305, 114),
         }
         self.texts: Dict[Tuple[str, int, Color], pygame.Surface] = {}
+
+    def set_skin(self, skin):
+        self.head_big = pygame.transform.smoothscale(make_head(skin=skin), (176, 127))
+
+    def draw_skins(self, screen, mouse, selected, unlocked, focus):
+        self._panel_with_title(screen, "Выбрать змейку")
+        for index, (key, box) in enumerate(self.skin_rects.items()):
+            active = key == selected
+            available = key in unlocked
+            pygame.draw.rect(screen, ds.DEEP_TEAL if active else (231, 215, 179), box, border_radius=18)
+            pygame.draw.rect(screen, ds.GOLD if active else ds.WOOD,
+                             box, 3 if index == focus or box.collidepoint(mouse) else 1,
+                             border_radius=18)
+            color = ds.CREAM if active else ds.TEXT_DARK
+            label = self._text(SKINS[key]["name"], 21, color)
+            screen.blit(label, label.get_rect(center=(box.centerx, box.y + 25)))
+            preview = self.skin_previews[key]
+            screen.blit(preview, preview.get_rect(center=(box.centerx, box.y + 100)))
+            lines = (["Выбрано"] if active else [f"{index + 1} · Выбрать"] if available else
+                     ["Спаси деревню", "чтобы открыть"] if key == "firefly" else
+                     ["Собери 24", "в бесконечном"])
+            for n, text in enumerate(lines):
+                label = self._text(text, 16, color)
+                screen.blit(label, label.get_rect(center=(box.centerx, box.y + 170 + n * 22)))
+        key = list(SKINS)[focus]
+        note = "Все змейки одинаково быстрые. Выбери любимую!"
+        if key not in unlocked:
+            note = ("Светлячок: собери все 12 выключателей в деревне."
+                    if key == "firefly" else "Дракончик: собери 24 за одну бесконечную игру.")
+        self._lines(screen, [note], 478, 19)
+        self._lines(screen, ["1–4 — выбор · стрелки — просмотр · Esc — назад"], 509, 16)
+        button = self.buttons["skin_back"]
+        button.draw(screen, button.rect.collidepoint(mouse))
 
     def _level_panel(self) -> pygame.Surface:
         panel = pygame.Surface((200, 50), pygame.SRCALPHA)
@@ -924,9 +963,13 @@ class GameUI:
         """Выбор цели перед началом игры, мышью или клавишами 1 / 2."""
         rect = self._panel_with_title(screen, ds.GAME_TITLE)
         bob = 4 * math.sin(now * 3)
-        screen.blit(self.head_big, self.head_big.get_rect(center=(490, 275 + bob)))
+        screen.blit(self.head_big, self.head_big.get_rect(center=(490, 255 + bob)))
         screen.blit(self.switch_big, self.switch_big.get_rect(center=(790, 275 - bob)))
-        self._lines(screen, ["Гаси свет в домиках — береги энергию!"], 344, 23)
+        box = self.skins_button
+        pygame.draw.rect(screen, ds.LEAF_GREEN if box.collidepoint(mouse) else ds.DEEP_TEAL,
+                         box, border_radius=16)
+        label = self._text("Выбрать змейку · C", 22, ds.CREAM)
+        screen.blit(label, label.get_rect(center=box.center))
         for key, box in self.mode_rects.items():
             selected = mode == key
             fill = ds.DEEP_TEAL if selected else (228, 211, 171)
@@ -960,7 +1003,7 @@ class GameUI:
         self.buttons["menu"].draw(screen, self.buttons["menu"].rect.collidepoint(mouse))
 
     def draw_win(self, screen: pygame.Surface, score: int, now: float,
-                 mouse: Tuple[int, int], state: str = "won", best: int = 0) -> None:
+                 mouse: Tuple[int, int], state: str = "won", best: int = 0, new_skin: str = "") -> None:
         """Итог обычной или бесконечной партии."""
         title = "Ура! Ты победил!" if state == "won" else "Всё поле твоё!" if state == "full" else "Хорошая попытка!"
         rect = self._panel_with_title(screen, title)
@@ -973,6 +1016,8 @@ class GameUI:
                  if state == "won" else
                  [f"Выключатели: {score}", f"Личный рекорд: {best}"])
         self._lines(screen, lines, 390, 29, (52, 86, 40))
+        if new_skin:
+            self._lines(screen, [f"Новая змейка: {new_skin}! Выбери её в меню."], 480, 20)
         button = self.buttons["again"]
         button.draw(screen, button.rect.collidepoint(mouse))
         self.buttons["menu"].draw(screen, self.buttons["menu"].rect.collidepoint(mouse))

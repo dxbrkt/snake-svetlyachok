@@ -16,6 +16,7 @@ import pygame
 
 import design as ds
 from music import MusicPlayer
+from snake_art import SKINS
 from design import (
     BOARD_BACKGROUND_COLOR,
     FPS,
@@ -364,6 +365,17 @@ class Game:
         if IS_WEB:
             import platform
             self.best = int(platform.window.snakeScores.best)
+        self.village_won = False
+        self.skin = "classic"
+        self.skin_focus = 0
+        self.new_skin = ""
+        if IS_WEB:
+            import platform
+            self.village_won = bool(platform.window.snakeWardrobe.villageWon)
+            saved_skin = str(platform.window.snakeWardrobe.selected)
+            if saved_skin in self.unlocked_skins:
+                self.skin = saved_skin
+        self.apply_skin()
         self.praise_index = 0
         self.tip_index = 0
         self.new_game()
@@ -374,6 +386,7 @@ class Game:
         self.apple = Apple(occupied_positions=self.snake.get_positions_set())
         self.switch_renderer.respawn(self.now)
         self.score = 0
+        self.new_skin = ""
         self.level = 1
         self.step_acc = 0.0
         self.progress = 1.0
@@ -385,6 +398,33 @@ class Game:
         self.background.ramp[:] = self.background.target
         self.ui.tip.set_text(ds.DEFAULT_TIP)
         update_caption(self.snake, self.score)
+
+    @property
+    def unlocked_skins(self):
+        """Награды не расходуются и не меняют сложность игры."""
+        result = {"classic", "berry"}
+        if self.village_won:
+            result.add("firefly")
+        if self.best >= 24:
+            result.add("dragon")
+        return result
+
+    def apply_skin(self):
+        self.snake_renderer.set_skin(self.skin)
+        self.ui.set_skin(self.skin)
+
+    def choose_skin(self, skin):
+        if self.state != "skins" or skin not in self.unlocked_skins:
+            return
+        self.skin = skin
+        self.apply_skin()
+        if IS_WEB:
+            import platform
+            platform.window.snakeWardrobe.select(skin)
+
+    def open_skins(self):
+        self.skin_focus = list(SKINS).index(self.skin)
+        self.state = "skins"
 
     @property
     def village(self) -> int:
@@ -473,7 +513,10 @@ class Game:
         snake.grow()
         self.score += 1
         self.light.switch_off()
+        old_unlocks = self.unlocked_skins
         self.save_best()
+        if "dragon" not in old_unlocks and "dragon" in self.unlocked_skins:
+            self.new_skin = "Дракончик"
         windows_off = self.score % ds.WIN_SCORE if self.mode == "endless" else self.score
         self.background.set_lit(ds.WIN_SCORE - windows_off)
         self.level = min(
@@ -489,10 +532,19 @@ class Game:
         self.ui.click_banner.show()
 
         self.praise_index = (self.praise_index + 1) % len(ds.PRAISES)
-        self.ui.bubble.say(ds.PRAISES[self.praise_index])
+        if self.mode == "endless" and self.score == 24 and self.new_skin == "Дракончик":
+            self.ui.bubble.say("Открыт Дракончик!", 4)
+        else:
+            self.ui.bubble.say(ds.PRAISES[self.praise_index])
         update_caption(snake, self.score)
 
         if self.mode == "village" and self.score >= ds.WIN_SCORE:
+            if not self.village_won:
+                self.new_skin = "Светлячок"
+            self.village_won = True
+            if IS_WEB:
+                import platform
+                platform.window.snakeWardrobe.winVillage()
             self.state = "celebrating"
             self.finish_timer = 2.4
             self.ui.tip.set_text(ds.WIN_TIP)
@@ -571,13 +623,15 @@ class Game:
         head = self.head_pixel()
         self.ui.bubble.draw(surface, head)
 
-        if self.state == "start":
+        if self.state == "skins":
+            self.ui.draw_skins(surface, mouse, self.skin, self.unlocked_skins, self.skin_focus)
+        elif self.state == "start":
             self.ui.draw_start(surface, self.now, mouse, self.mode, self.best)
         elif self.state == "paused":
             self.ui.draw_pause(surface, mouse)
         elif self.state in ("won", "lost", "full"):
             self.ui.draw_win(surface, self.score, self.now, mouse,
-                             self.state, self.best)
+                             self.state, self.best, self.new_skin)
 
         self.music.draw(surface, mouse)
 
@@ -622,8 +676,21 @@ def handle_keys(game: Game) -> None:
                 game.toggle_pause()
             elif game.state != "start":
                 game.show_menu()
+        elif game.state == "skins":
+            if event.key in (pygame.K_LEFT, pygame.K_RIGHT, pygame.K_TAB):
+                step = -1 if event.key == pygame.K_LEFT else 1
+                game.skin_focus = (game.skin_focus + step) % len(SKINS)
+            elif event.key in (pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4):
+                game.skin_focus = event.key - pygame.K_1
+                game.choose_skin(list(SKINS)[game.skin_focus])
+            elif confirm:
+                game.choose_skin(list(SKINS)[game.skin_focus])
+            elif event.key == pygame.K_BACKSPACE:
+                game.state = "start"
         elif game.state == "start":
-            if event.key in (pygame.K_1, pygame.K_2, pygame.K_TAB):
+            if event.key == pygame.K_c:
+                game.open_skins()
+            elif event.key in (pygame.K_1, pygame.K_2, pygame.K_TAB):
                 game.select_mode(
                     "village" if event.key == pygame.K_1 else
                     "endless" if event.key == pygame.K_2 else
@@ -675,7 +742,18 @@ def handle_click(game: Game, position: Tuple[int, int]) -> None:
         position: Координаты щелчка.
     """
     buttons = game.ui.buttons
+    if game.state == "skins":
+        if buttons["skin_back"].rect.collidepoint(position):
+            game.state = "start"
+        for index, (skin, rect) in enumerate(game.ui.skin_rects.items()):
+            if rect.collidepoint(position):
+                game.skin_focus = index
+                game.choose_skin(skin)
+        return
     if game.state == "start":
+        if game.ui.skins_button.collidepoint(position):
+            game.open_skins()
+            return
         for mode, rect in game.ui.mode_rects.items():
             if rect.collidepoint(position):
                 game.select_mode(mode)

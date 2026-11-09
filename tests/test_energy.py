@@ -42,6 +42,8 @@ def test_each_switch_turns_off_one_window_until_restart(game):
 def test_light_does_not_return_after_five_seconds(game):
     game.start()
     game.collect_switch()
+    # Keep the next switch away from the straight path during this lighting test.
+    game.apple.position = (0, 0)
     for _ in range(120):
         game.update(0.05)
     assert game.light.off_count == 1

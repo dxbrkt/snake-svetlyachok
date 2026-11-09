@@ -103,3 +103,28 @@
         },
     };
 })();
+
+// Cosmetic choices and the village achievement are independent of audio.
+(() => {
+    let villageWon = false, selected = 'classic';
+    try {
+        const stored = JSON.parse(localStorage.getItem('snake.wardrobe') || '{}');
+        villageWon = stored?.villageWon === true;
+        selected = typeof stored?.selected === 'string' ? stored.selected : 'classic';
+    } catch (_) {}
+    function unlocked(skin) {
+        return ['classic', 'berry'].includes(skin) ||
+            (skin === 'firefly' && villageWon) ||
+            (skin === 'dragon' && window.snakeScores.best >= 24);
+    }
+    if (!unlocked(selected)) selected = 'classic';
+    function persist() {
+        try { localStorage.setItem('snake.wardrobe', JSON.stringify({villageWon, selected})); } catch (_) {}
+    }
+    window.snakeWardrobe = {
+        get selected() { return selected; },
+        get villageWon() { return villageWon; },
+        select(skin) { if (unlocked(skin)) { selected = skin; persist(); } },
+        winVillage() { villageWon = true; persist(); },
+    };
+})();

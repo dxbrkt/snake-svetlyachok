@@ -82,3 +82,33 @@ test('record survives reload, rejects malformed data, tolerates blocked storage'
     scores = reload({getItem() {throw Error('blocked');}, setItem() {throw Error('blocked');}});
     scores.save(12); assert.equal(scores.best, 12);
 });
+
+test('wardrobe restores choices and rewards, validates saves, works without storage', () => {
+    const saved = new Map();
+    const storage = {getItem: key => saved.get(key) ?? null,
+        setItem: (key, value) => saved.set(key, value)};
+    const code = fs.readFileSync('web/audio.js', 'utf8').split('// Best score survives reloads;')[1];
+    function reload(localStorage) {
+        const context = {window: {}, localStorage};
+        vm.runInNewContext('// Best score survives reloads;' + code, context);
+        return context.window;
+    }
+    let app = reload(storage);
+    app.snakeWardrobe.select('firefly');
+    assert.equal(app.snakeWardrobe.selected, 'classic');
+    app.snakeWardrobe.select('berry');
+    assert.equal(reload(storage).snakeWardrobe.selected, 'berry');
+    app.snakeWardrobe.winVillage(); app.snakeWardrobe.select('firefly');
+    app = reload(storage);
+    assert.equal(app.snakeWardrobe.selected, 'firefly');
+    assert.equal(app.snakeWardrobe.villageWon, true);
+    app.snakeScores.save(24); app.snakeWardrobe.select('dragon');
+    assert.equal(reload(storage).snakeWardrobe.selected, 'dragon');
+    saved.set('snake.wardrobe', '{broken');
+    assert.equal(reload(storage).snakeWardrobe.selected, 'classic');
+    saved.set('snake.wardrobe', '{"selected":"missing","villageWon":"false"}');
+    assert.equal(reload(storage).snakeWardrobe.villageWon, false);
+    app = reload({getItem() {throw Error('blocked');}, setItem() {throw Error('blocked');}});
+    app.snakeWardrobe.winVillage(); app.snakeWardrobe.select('firefly');
+    assert.equal(app.snakeWardrobe.selected, 'firefly');
+});
