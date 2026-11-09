@@ -1,19 +1,15 @@
 """Лесное радио: потоковое воспроизведение и компактный плеер Pygame."""
 
 import math
-
 import pygame
-
 import design as ds
 from visuals import wood_panel, wrap_text
-
 
 TRACKS = (
     ("Змейка", "snake.ogg", 102.36),
     ("Змейка и выключатель", "snake-and-switch.ogg", 132.432),
     ("Песня игры", "game-song.ogg", 174.984),
 )
-
 
 class MusicPlayer:
     """Плеер живёт независимо от паузы и перезапуска партии."""
@@ -43,12 +39,15 @@ class MusicPlayer:
     @property
     def position(self):
         """Время трека, включая уже проигранное перед паузой."""
+        if not self.playing:
+            return min(TRACKS[self.index][2], self.elapsed)
         running = (pygame.time.get_ticks() - self.started_at) / 1000
-        return min(TRACKS[self.index][2], self.elapsed + (running if self.playing else 0))
+        return min(TRACKS[self.index][2], self.elapsed + running)
 
     def _prepare(self):
         if not pygame.mixer.get_init():
-            pygame.mixer.init()
+            # Инициализируем аудио с буфером 2048 для исключения роботизированного скрежета
+            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=2048)
         pygame.mixer.music.set_endevent(self.end_event)
         pygame.mixer.music.set_volume(self.volume)
 
@@ -85,11 +84,14 @@ class MusicPlayer:
         """Переключить трек по кругу и начать его с начала."""
         if pygame.mixer.get_init():
             pygame.mixer.music.stop()
+        
+        # Сбрасываем флаги ДО очистки очереди и вызова play(), чтобы избежать микро-коллизий
+        self.playing = False
+        self.loaded = False
+        self.elapsed = 0.0
+        
         pygame.event.clear(self.end_event)
         self.index = (self.index + step) % len(TRACKS)
-        self.loaded = False
-        self.playing = False
-        self.elapsed = 0.0
         self.play()
 
     def set_volume(self, value):
@@ -102,6 +104,7 @@ class MusicPlayer:
         """Поглотить ввод плеера, чтобы он не управлял змейкой."""
         if event.type == self.end_event:
             if self.playing:
+                self.playing = False  # Срочно останавливаем логику старого трека перед переключением
                 self.change_track(1)
             return True
         if event.type == pygame.KEYDOWN:
@@ -160,6 +163,7 @@ class MusicPlayer:
         surface.blit(self.panel, self.rect)
         cx = self.rect.centerx
         self._label(surface, "ЛЕСНОЕ РАДИО", 15, ds.GOLD, (cx, 263))
+        
         # Виниловая пластинка с зелёной этикеткой и золотым бликом.
         center = (cx, 316)
         pygame.draw.circle(surface, ds.NIGHT_TEAL, center, 35)
@@ -167,14 +171,18 @@ class MusicPlayer:
             pygame.draw.circle(surface, (39, 89, 96), center, radius, 1)
         pygame.draw.circle(surface, ds.LEAF_GREEN, center, 14)
         pygame.draw.circle(surface, ds.CREAM, center, 4)
+        
         angle = self.phase * 1.8
         dot = (cx + int(28 * math.cos(angle)), 316 + int(28 * math.sin(angle)))
         pygame.draw.circle(surface, ds.GOLD, dot, 3)
+        
         title = TRACKS[self.index][0]
         for i, line in enumerate(wrap_text(title, self.assets.font(19), 148)):
             self._label(surface, line, 19, ds.CREAM, (cx, 374 + i * 24))
+            
         status = "Звук недоступен" if self.error else f"{self.index + 1:02d} / 03"
         self._label(surface, status, 13, ds.LIGHT_GREEN, (cx, 416))
+        
         for name, rect in self.buttons.items():
             hovered = rect.collidepoint(mouse)
             fill = ds.LIGHT_GREEN if hovered else (ds.LEAF_GREEN if name == "play" else (36, 86, 74))
@@ -182,6 +190,7 @@ class MusicPlayer:
             pygame.draw.rect(surface, fill, rect, border_radius=15)
             x, y = rect.center
             ink = ds.NIGHT_TEAL if name == "play" else ds.CREAM
+            
             if name == "play" and self.playing:
                 for dx in (-7, 3):
                     pygame.draw.rect(surface, ink, (x + dx, y - 9, 5, 18), border_radius=2)
@@ -191,6 +200,7 @@ class MusicPlayer:
                 direction = -1 if name == "previous" else 1
                 pygame.draw.polygon(surface, ink, [(x - direction * 5, y - 8), (x - direction * 5, y + 8), (x + direction * 6, y)])
                 pygame.draw.line(surface, ink, (x + direction * 9, y - 8), (x + direction * 9, y + 8), 3)
+                
         position = self.position
         progress = pygame.Rect(1110, 500, 134, 4)
         pygame.draw.rect(surface, ds.NIGHT_TEAL, progress, border_radius=2)
@@ -198,8 +208,10 @@ class MusicPlayer:
         fill.width = int(progress.width * position / TRACKS[self.index][2])
         if fill.width:
             pygame.draw.rect(surface, ds.GOLD, fill, border_radius=2)
+            
         self._label(surface, self._time(position), 12, ds.CREAM, (1125, 516))
         self._label(surface, self._time(TRACKS[self.index][2]), 12, ds.CREAM, (1228, 516))
+        
         bar = pygame.Rect(1110, 549, 134, 5)
         pygame.draw.rect(surface, ds.NIGHT_TEAL, bar, border_radius=3)
         fill = bar.copy()
@@ -207,5 +219,6 @@ class MusicPlayer:
         if fill.width:
             pygame.draw.rect(surface, ds.LIGHT_GREEN, fill, border_radius=3)
         pygame.draw.circle(surface, ds.CREAM, (bar.x + fill.width, bar.centery), 6)
+        
         self._label(surface, f"ГРОМКОСТЬ · {round(self.volume * 100)}%", 12, ds.CREAM, (cx, 535))
-        self._label(surface, "M · музыка   [ ] · трек", 11, ds.LIGHT_GREEN, (cx, 574))
+        self._label(surface, "M · музыка  [ ] · трек", 11, ds.LIGHT_GREEN, (cx, 574))
